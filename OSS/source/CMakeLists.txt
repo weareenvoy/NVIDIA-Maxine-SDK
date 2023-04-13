@@ -1,4 +1,4 @@
-# Sample apps
+# Source code for apps
 
 add_library(utils_sample INTERFACE)
 target_include_directories(utils_sample INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/utils ${OpenCV_INCLUDE_DIR})

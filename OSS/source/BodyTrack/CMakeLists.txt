@@ -6,11 +6,10 @@ set(SOURCE_FILES BodyEngine.cpp
 set(HEADER_FILES BodyEngine.h)
 if(MSVC)
 	set(SOURCE_FILES ${SOURCE_FILES} 
-		../../nvar/src/nvARProxy.cpp
+	../../nvar/src/nvARProxy.cpp
         ../../nvar/src/nvCVImageProxy.cpp)
-	
 	set(HEADER_FILES ${HEADER_FILES}
-		../utils/RenderingUtils.h)
+	../utils/RenderingUtils.h)
 endif(MSVC)
 
 # Set Visual Studio source filters
