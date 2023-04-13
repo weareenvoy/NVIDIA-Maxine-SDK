@@ -1,0 +1,15 @@
+Changelog (v0.8.2.0)
+--------------------
+ - Face Expression Estimation
+    - 6DOF head pose now available.
+        - Enable by setting NvAR_Parameter_Config(PoseMode) to 1. Default is 0. 
+        - Get the pose translation using NvAR_Parameter_Output(PoseTranslation). 
+        - Camera intrinsics can be set using NvAR_Parameter_Input(CameraIntrinsicParams).
+    - Expression estimation model updated. The new model is more accurate, and enables subtle expressions such as asymmetric brows, inner/outer brow separation, asymmetric smile and frown, jaw left/right, squint shapes, crossing eye gaze, cheek puff, and more. 
+        - Enable cheek puff shapes by setting NvAR_Parameter_Config(EnableCheekPuff) to 1.
+    - New face model for visualization recommended for FaceExpressions feature. The model has updated blendshapes, and face area partitioning. 
+        - Enable using --render_model=face_model3.nvf in ExpressionApp.
+ - Eye Contact
+    - Performance improvements
+        - CUDA graphs functionality to enable CUDA optimization now available for Eye contact feature. 
+        - Use the parameter NvAR_Parameter_Config(UseCudaGraph) to enable/disable CUDA graphs. Default is OFF
