@@ -70,3 +70,6 @@ add_library(GLM INTERFACE)
 target_include_directories(GLM INTERFACE ${GLM_INCLUDE_DIR})
 #message( "GLM_INCLUDE_DIR          is ${GLM_INCLUDE_DIR}" )
 
+####################
+# Interface to GLM #
+####################

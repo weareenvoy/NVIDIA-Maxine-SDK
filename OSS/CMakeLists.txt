@@ -1,14 +1,20 @@
 cmake_minimum_required(VERSION 3.10.0)
 
 # Set path where samples will be installed
-set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR} CACHE PATH "Path to where the samples will be installed")
+set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR} CACHE PATH "Path to where the source code will be installed")
 
-project(NvAR_SDK CXX)
+project(Envoy_Maxine_SDK CXX)
 
-set(CMAKE_CONFIGURATION_TYPES "Release")
+# Create Debug and Release configuration types
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release") 
+set(CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}" CACHE STRING "List of supported configurations.") 
+mark_as_advanced(CMAKE_CONFIGURATION_TYPES) 
+if(NOT CMAKE_BUILD_TYPE)     
+    message("Defaulting to release build.")     
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build, options are: ${CMAKE_CONFIGURATION_TYPES}." FORCE) 
+endif()
 
 # Require C++11 and disable non-standard extensions
-
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
 if(MSVC)
@@ -45,7 +51,7 @@ else()
         /usr/include
         ${CMAKE_CURRENT_SOURCE_DIR}/nvar/include
         REQUIRED
-        )
+    )
 
     target_include_directories(nvARPose INTERFACE ${ARSDK_INCLUDES})
 
@@ -58,12 +64,12 @@ else()
         /usr/lib
         ${CMAKE_CURRENT_SOURCE_DIR}/bin
         REQUIRED
-        NO_DEFAULT_PATH)
+        NO_DEFAULT_PATH
+    )
 
     target_link_libraries(nvARPose INTERFACE "${ARSDK_LIB}")
 
     message(STATUS "ARSDK_LIB: ${ARSDK_LIB}")
-
 
     # Add target for NVCVImage
     add_library(NVCVImage INTERFACE)
@@ -77,10 +83,9 @@ else()
         /usr/include
         ${CMAKE_CURRENT_SOURCE_DIR}/nvar/include
         REQUIRED
-        )
+    )
 
     target_include_directories(NVCVImage INTERFACE ${NVCVImage_INCLUDES})
-
 
     find_library(NVCVImage_LIB
         NAMES libNVCVImage.so
@@ -98,7 +103,6 @@ else()
     message(STATUS "NVCVImage_LIB: ${NVCVImage_LIB}")
     message(STATUS "NVCVImage_INCLUDES_PATH: ${NVCVImage_INCLUDES}")
 
-
 endif()
 
 add_definitions(-DNOMINMAX -DWIN32_LEAN_AND_MEAN)
@@ -106,7 +110,6 @@ add_definitions(-DNOMINMAX -DWIN32_LEAN_AND_MEAN)
 # Set common build path for all targets
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-
 
 set(ENABLE_SAMPLES TRUE)
 add_subdirectory(source)
