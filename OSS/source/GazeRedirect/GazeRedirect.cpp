@@ -73,7 +73,7 @@
  * Command-line arguments
  ********************************************************************************/
 
-bool FLAG_debug = false, FLAG_verbose = false, FLAG_temporal = true, FLAG_captureOutputs = false,
+bool FLAG_debug = false, FLAG_verbose = false, TEMPORAL_SMOOTHING = true, FLAG_captureOutputs = false,
      FLAG_drawVisualization = true, FLAG_offlineMode = false, FLAG_isNumLandmarks126 = false,
      FLAG_splitScreenView = true, FLAG_displayLandmarks = false, FLAG_gazeRedirect = true, FLAG_useCudaGraph = false;
 ;
@@ -211,7 +211,7 @@ static int ParseMyArgs(int argc, char **argv) {
         GetFlagArgVal("landmarks", arg, &FLAG_landmarks) || GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
         GetFlagArgVal("eyesize_sensitivity", arg, &FLAG_eyeSizeSensitivity) ||
         GetFlagArgVal("split_screen_view", arg, &FLAG_splitScreenView) ||
-        GetFlagArgVal("temporal", arg, &FLAG_temporal) ||
+        GetFlagArgVal("temporal", arg, &TEMPORAL_SMOOTHING) ||
         GetFlagArgVal("draw_visualization", arg, &FLAG_drawVisualization) ||
         GetFlagArgVal("redirect_gaze", arg, &FLAG_gazeRedirect) ||
         GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph))) {
@@ -284,7 +284,7 @@ std::string getCalendarTime() {
   return calendarTime.str();
 }
 
-class DoApp {
+class BodyTrack {
  public:
   enum Err {
     errNone = GazeEngine::Err::errNone,
@@ -311,8 +311,8 @@ class DoApp {
   };
   Err doAppErr(GazeEngine::Err status) { return (Err)status; }
   GazeEngine gaze_ar_engine;
-  DoApp();
-  ~DoApp();
+  BodyTrack();
+  ~BodyTrack();
 
   void stop();
   Err initGazeEngine(const char *modelPath = nullptr, bool isLandmarks126 = false, bool gazeRedirect = true,
@@ -352,10 +352,10 @@ class DoApp {
   bool drawVisualization, showFPS, captureVideo, splitScreenView, displayLandmarks;
 };
 
-DoApp *gApp = nullptr;
-const char DoApp::windowTitle[] = "GazeRedirect App";
+BodyTrack *gApp = nullptr;
+const char BodyTrack::windowTitle[] = "GazeRedirect App";
 
-void DoApp::processKey(int key) {
+void BodyTrack::processKey(int key) {
   switch (key) {
     case '3':
       gaze_ar_engine.destroyGazeRedirectionFeature();
@@ -387,7 +387,7 @@ void DoApp::processKey(int key) {
   }
 }
 
-DoApp::Err DoApp::initGazeEngine(const char *modelPath, bool isNumLandmarks126, bool gazeRedirect,
+BodyTrack::Err BodyTrack::initGazeEngine(const char *modelPath, bool isNumLandmarks126, bool gazeRedirect,
                                  unsigned eyeSizeSensitivity, bool useCudaGraph) {
   if (!cap.isOpened()) return errVideo;
 
@@ -412,7 +412,7 @@ DoApp::Err DoApp::initGazeEngine(const char *modelPath, bool isNumLandmarks126, 
   return doAppErr(nvErr);
 }
 
-void DoApp::stop() {
+void BodyTrack::stop() {
   gaze_ar_engine.destroyGazeRedirectionFeature();
 
   if (FLAG_offlineMode) {
@@ -424,7 +424,7 @@ void DoApp::stop() {
 #endif  // VISUALIZE
 }
 
-void DoApp::drawBBoxes(const cv::Mat &src, NvAR_Rect *output_bbox) {
+void BodyTrack::drawBBoxes(const cv::Mat &src, NvAR_Rect *output_bbox) {
   cv::Mat frm;
   if (FLAG_offlineMode)
     frm = src.clone();
@@ -437,7 +437,7 @@ void DoApp::drawBBoxes(const cv::Mat &src, NvAR_Rect *output_bbox) {
                   cv::Scalar(255, 0, 0), 2);
 }
 
-DoApp::Err DoApp::writeVideo(const cv::Mat &frm) {
+BodyTrack::Err BodyTrack::writeVideo(const cv::Mat &frm) {
   if (captureVideo) {
     if (!capturedVideo.isOpened()) {
       //Assign the filename for capturing video
@@ -476,7 +476,7 @@ DoApp::Err DoApp::writeVideo(const cv::Mat &frm) {
   return errNone;
 }
 
-void DoApp::DrawLandmarkPoints(const cv::Mat &src, NvAR_Point2f *facial_landmarks, int numLandmarks , cv::Scalar* color) {
+void BodyTrack::DrawLandmarkPoints(const cv::Mat &src, NvAR_Point2f *facial_landmarks, int numLandmarks , cv::Scalar* color) {
   if (!facial_landmarks)
     return; 
   cv::Mat frm;
@@ -489,7 +489,7 @@ void DoApp::DrawLandmarkPoints(const cv::Mat &src, NvAR_Point2f *facial_landmark
     cv::circle(frm, cv::Point(lround(pt->x), lround(pt->y)), 1.5, *color, -1);
 }
 
-DoApp::Err DoApp::acquireFrame() {
+BodyTrack::Err BodyTrack::acquireFrame() {
   Err err = errNone;
 
   // If the machine goes to sleep with the app running and then wakes up, the camera object is not destroyed but the
@@ -510,8 +510,8 @@ DoApp::Err DoApp::acquireFrame() {
   return err;
 }
 
-DoApp::Err DoApp::acquireGazeRedirection() {
-  DoApp::Err doErr = errNone;
+BodyTrack::Err BodyTrack::acquireGazeRedirection() {
+  BodyTrack::Err doErr = errNone;
 
   nvErr = gaze_ar_engine.acquireGazeRedirection(frame, outputFrame);
 
@@ -597,7 +597,7 @@ DoApp::Err DoApp::acquireGazeRedirection() {
   return doErr;
 }
 
-DoApp::Err DoApp::initCamera(const char *camRes, unsigned int camID) {
+BodyTrack::Err BodyTrack::initCamera(const char *camRes, unsigned int camID) {
   if (cap.open(camID)) {
     if (camRes) {
       int n;
@@ -636,7 +636,7 @@ DoApp::Err DoApp::initCamera(const char *camRes, unsigned int camID) {
   return errNone;
 }
 
-DoApp::Err DoApp::initOfflineMode(const char *inputFilename, const char *outputFilename) {
+BodyTrack::Err BodyTrack::initOfflineMode(const char *inputFilename, const char *outputFilename) {
   if (cap.open(inputFilename)) {
     inputWidth = (int)cap.get(CV_CAP_PROP_FRAME_WIDTH);
     inputHeight = (int)cap.get(CV_CAP_PROP_FRAME_HEIGHT);
@@ -673,7 +673,7 @@ DoApp::Err DoApp::initOfflineMode(const char *inputFilename, const char *outputF
   return Err::errNone;
 }
 
-DoApp::DoApp() {
+BodyTrack::BodyTrack() {
   // Make sure things are initialized properly
   gApp = this;
   drawVisualization = FLAG_drawVisualization;
@@ -686,7 +686,7 @@ DoApp::DoApp() {
   nvErr = GazeEngine::errNone;
 }
 
-DoApp::~DoApp() {}
+BodyTrack::~BodyTrack() {}
 
 char *g_nvARSDKPath = NULL;
 
@@ -699,7 +699,7 @@ int chooseGPU() {
   return 0;
 }
 
-void DoApp::getFPS() {
+void BodyTrack::getFPS() {
   const float timeConstant = 16.f;
   frameTimer.stop();
   float t = (float)frameTimer.elapsedTimeFloat();
@@ -714,7 +714,7 @@ void DoApp::getFPS() {
   frameTimer.start();
 }
 
-void DoApp::drawFPS(cv::Mat &img) {
+void BodyTrack::drawFPS(cv::Mat &img) {
   getFPS();
   if (frameTime && showFPS) {
     char buf[32];
@@ -724,20 +724,20 @@ void DoApp::drawFPS(cv::Mat &img) {
   }
 }
 
-void DoApp::drawKalmanStatus(cv::Mat &img) {
+void BodyTrack::drawKalmanStatus(cv::Mat &img) {
   char buf[32];
   snprintf(buf, sizeof(buf), "Kalman %s", (gaze_ar_engine.bStabilizeFace ? "on" : "off"));
   cv::putText(img, buf, cv::Point(10, img.rows - 40), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255), 1);
 }
 
-void DoApp::drawVideoCaptureStatus(cv::Mat &img) {
+void BodyTrack::drawVideoCaptureStatus(cv::Mat &img) {
   char buf[32];
   snprintf(buf, sizeof(buf), "Video Capturing %s", (captureVideo ? "on" : "off"));
   cv::putText(img, buf, cv::Point(10, img.rows - 70), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255), 1);
 }
 
-DoApp::Err DoApp::run() {
-  DoApp::Err doErr = errNone;
+BodyTrack::Err BodyTrack::run() {
+  BodyTrack::Err doErr = errNone;
 
   GazeEngine::Err err = gaze_ar_engine.initGazeRedirectionIOParams();
   if (err != GazeEngine::Err::errNone) {
@@ -749,13 +749,13 @@ DoApp::Err DoApp::run() {
     if (frame.empty() && FLAG_offlineMode) {
       // We have reached the end of the video
       // so return without any error.
-      return DoApp::errNone;
-    } else if (doErr != DoApp::errNone) {
+      return BodyTrack::errNone;
+    } else if (doErr != BodyTrack::errNone) {
       return doErr;
     }
     outputFrame.create(inputHeight, inputWidth, frame.type());
     doErr = acquireGazeRedirection();
-    if (DoApp::errCancel == doErr || DoApp::errVideo == doErr) return doErr;
+    if (BodyTrack::errCancel == doErr || BodyTrack::errVideo == doErr) return doErr;
 #ifdef VISUALIZE
     if (!frame.empty() && !FLAG_offlineMode) {
       if (drawVisualization) {
@@ -799,7 +799,7 @@ DoApp::Err DoApp::run() {
   return doErr;
 }
 
-const char *DoApp::errorStringFromCode(DoApp::Err code) {
+const char *BodyTrack::errorStringFromCode(BodyTrack::Err code) {
   struct LUTEntry {
     Err code;
     const char *str;
@@ -842,14 +842,14 @@ int main(int argc, char **argv) {
   // Parse the arguments
   if (0 != ParseMyArgs(argc, argv)) return -100;
 
-  DoApp app;
-  DoApp::Err doErr = DoApp::Err::errNone;
-  if (FLAG_verbose) printf("Enable temporal optimizations in detecting face and landmarks = %d\n", FLAG_temporal);
-  app.gaze_ar_engine.setFaceStabilization(FLAG_temporal);
+  BodyTrack app;
+  BodyTrack::Err doErr = BodyTrack::Err::errNone;
+  if (FLAG_verbose) printf("Enable temporal optimizations in detecting face and landmarks = %d\n", TEMPORAL_SMOOTHING);
+  app.gaze_ar_engine.setFaceStabilization(TEMPORAL_SMOOTHING);
 
   if (FLAG_offlineMode) {
     if (FLAG_inFile.empty()) {
-      doErr = DoApp::errMissing;
+      doErr = BodyTrack::errMissing;
       printf("ERROR: %s, please specify input file using --in \n", app.errorStringFromCode(doErr));
       goto bail;
     }

@@ -76,7 +76,7 @@ bool FLAG_debug = false, FLAG_verbose = false, FLAG_temporal = true, FLAG_captur
 FLAG_offlineMode = false, FLAG_isNumLandmarks126 = false; unsigned int FLAG_landmarkMode = 0;
 std::string FLAG_outDir, FLAG_inFile, FLAG_outFile, FLAG_modelPath, FLAG_landmarks, FLAG_proxyWireframe,
     FLAG_captureCodec = "avc1", FLAG_camRes, FLAG_faceModel;
-unsigned int FLAG_appMode = 2;
+unsigned int APP_MODE = 2;
 
 /********************************************************************************
  * Usage
@@ -205,7 +205,7 @@ static int ParseMyArgs(int argc, char **argv) {
                 GetFlagArgVal("landmarks", arg, &FLAG_landmarks) || GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
                 GetFlagArgVal("wireframe_mesh", arg, &FLAG_proxyWireframe) ||
                 GetFlagArgVal("face_model", arg, &FLAG_faceModel) ||
-                GetFlagArgVal("app_mode", arg, &FLAG_appMode) || GetFlagArgVal("temporal", arg, &FLAG_temporal) || 
+                GetFlagArgVal("app_mode", arg, &APP_MODE) || GetFlagArgVal("temporal", arg, &FLAG_temporal) || 
                 GetFlagArgVal("landmark_mode", arg, &FLAG_landmarkMode))) {
       continue;
     } else if (GetFlagArgVal("help", arg, &help)) {
@@ -273,7 +273,7 @@ std::string getCalendarTime() {
   return calendarTime.str();
 }
 
-class DoApp {
+class BodyTrack {
  public:
   enum Err {
     errNone           = FaceEngine::Err::errNone,
@@ -303,8 +303,8 @@ class DoApp {
   };
   Err doAppErr(FaceEngine::Err status) { return (Err)status; }
   FaceEngine face_ar_engine;
-  DoApp();
-  ~DoApp();
+  BodyTrack();
+  ~BodyTrack();
 
   void stop();
   Err initFaceEngine(const char *modelPath = nullptr, bool isLandmarks126 = false, int mode = 0);
@@ -352,10 +352,10 @@ class DoApp {
   std::vector<NvAR_Vector3u16> wfMesh_tvi_data;
 };
 
-DoApp *gApp = nullptr;
-const char DoApp::windowTitle[] = "FaceTrack App";
+BodyTrack *gApp = nullptr;
+const char BodyTrack::windowTitle[] = "FaceTrack App";
 
-void DoApp::processKey(int key) {
+void BodyTrack::processKey(int key) {
   switch (key) {
     case '3':
       face_ar_engine.destroyFeatures();
@@ -402,7 +402,7 @@ void DoApp::processKey(int key) {
 }
 
 
-DoApp::Err DoApp::initFaceEngine(const char *modelPath, bool isNumLandmarks126, int mode) {
+BodyTrack::Err BodyTrack::initFaceEngine(const char *modelPath, bool isNumLandmarks126, int mode) {
   if (!cap.isOpened()) return errVideo;
 
   int numLandmarkPoints = isNumLandmarks126 ? 126 : 68;
@@ -433,7 +433,7 @@ DoApp::Err DoApp::initFaceEngine(const char *modelPath, bool isNumLandmarks126, 
   return doAppErr(nvErr);
 }
 
-void DoApp::stop() {
+void BodyTrack::stop() {
   face_ar_engine.destroyFeatures();
 
   if (FLAG_offlineMode) {
@@ -447,7 +447,7 @@ void DoApp::stop() {
 #endif  // VISUALIZE
 }
 
-void DoApp::showFaceFitErrorMessage() {
+void BodyTrack::showFaceFitErrorMessage() {
   cv::Mat errBox = cv::Mat::zeros(120, 640, CV_8UC3);
   cv::putText(errBox, cv::String("Warning: Face Fitting needs face_model2.nvf in the path --model_path"), cv::Point(20, 20),
               cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
@@ -461,7 +461,7 @@ void DoApp::showFaceFitErrorMessage() {
   cv::waitKey(0);
 }
 
-void DoApp::DrawBBoxes(const cv::Mat &src, NvAR_Rect *output_bbox) {
+void BodyTrack::DrawBBoxes(const cv::Mat &src, NvAR_Rect *output_bbox) {
   cv::Mat frm;
   if (FLAG_offlineMode)
     frm = src.clone();
@@ -476,7 +476,7 @@ void DoApp::DrawBBoxes(const cv::Mat &src, NvAR_Rect *output_bbox) {
 }
 
 
-void DoApp::writeVideoAndEstResults(const cv::Mat &frm, NvAR_BBoxes output_bboxes, NvAR_Point2f *landmarks) {
+void BodyTrack::writeVideoAndEstResults(const cv::Mat &frm, NvAR_BBoxes output_bboxes, NvAR_Point2f *landmarks) {
   if (captureVideo) {
     if (!capturedVideo.isOpened()) {
       const std::string currentCalendarTime = getCalendarTime();
@@ -521,7 +521,7 @@ void DoApp::writeVideoAndEstResults(const cv::Mat &frm, NvAR_BBoxes output_bboxe
   }
 }
 
-void DoApp::writeEstResults(std::ofstream &outputFile, NvAR_BBoxes output_bboxes, NvAR_Point2f *landmarks) {
+void BodyTrack::writeEstResults(std::ofstream &outputFile, NvAR_BBoxes output_bboxes, NvAR_Point2f *landmarks) {
   /**
    * Output File Format :
    * FaceDetectOn, LandmarkDetectOn
@@ -566,7 +566,7 @@ void DoApp::writeEstResults(std::ofstream &outputFile, NvAR_BBoxes output_bboxes
   outputFile << "\n";
 }
 
-void DoApp::writeFrameAndEstResults(const cv::Mat &frm, NvAR_BBoxes output_bboxes, NvAR_Point2f *landmarks) {
+void BodyTrack::writeFrameAndEstResults(const cv::Mat &frm, NvAR_BBoxes output_bboxes, NvAR_Point2f *landmarks) {
   if (captureFrame) {
     const std::string currentCalendarTime = getCalendarTime();
     const std::string capturedFrame = currentCalendarTime + ".png";
@@ -591,7 +591,7 @@ void DoApp::writeFrameAndEstResults(const cv::Mat &frm, NvAR_BBoxes output_bboxe
   }
 }
 
-void DoApp::DrawLandmarkPoints(const cv::Mat &src, NvAR_Point2f *facial_landmarks, int numLandmarks) {
+void BodyTrack::DrawLandmarkPoints(const cv::Mat &src, NvAR_Point2f *facial_landmarks, int numLandmarks) {
   cv::Mat frm;
   if (FLAG_offlineMode)
     frm = src.clone();
@@ -608,7 +608,7 @@ void DoApp::DrawLandmarkPoints(const cv::Mat &src, NvAR_Point2f *facial_landmark
   if (FLAG_offlineMode) landMarkOutputVideo.write(frm);
 }
 
-void DoApp::DrawFaceMesh(const cv::Mat &src, NvAR_FaceMesh *face_mesh) {
+void BodyTrack::DrawFaceMesh(const cv::Mat &src, NvAR_FaceMesh *face_mesh) {
   cv::Mat render_frame;
   if (FLAG_offlineMode)
     render_frame = src.clone();
@@ -639,7 +639,7 @@ void DoApp::DrawFaceMesh(const cv::Mat &src, NvAR_FaceMesh *face_mesh) {
   if (FLAG_offlineMode) faceFittingOutputVideo.write(render_frame);
 }
 
-DoApp::Err DoApp::acquireFrame() {
+BodyTrack::Err BodyTrack::acquireFrame() {
   Err err = errNone;
 
   // If the machine goes to sleep with the app running and then wakes up, the camera object is not destroyed but the
@@ -661,7 +661,7 @@ DoApp::Err DoApp::acquireFrame() {
   return err;
 }
 
-DoApp::Err DoApp::acquireFaceBox() {
+BodyTrack::Err BodyTrack::acquireFaceBox() {
   Err err = errNone;
   NvAR_Rect output_bbox;
 
@@ -701,7 +701,7 @@ DoApp::Err DoApp::acquireFaceBox() {
   return err;
 }
 
-DoApp::Err DoApp::acquireFaceBoxAndLandmarks() {
+BodyTrack::Err BodyTrack::acquireFaceBoxAndLandmarks() {
   Err err = errNone;
   int numLandmarks = face_ar_engine.getNumLandmarks();
   NvAR_Rect output_bbox;
@@ -758,7 +758,7 @@ DoApp::Err DoApp::acquireFaceBoxAndLandmarks() {
   return err;
 }
 
-DoApp::Err DoApp::initCamera(const char *camRes) {
+BodyTrack::Err BodyTrack::initCamera(const char *camRes) {
   if (cap.open(0)) {
     if (camRes) {
       int n;
@@ -788,7 +788,7 @@ DoApp::Err DoApp::initCamera(const char *camRes) {
   return errNone;
 }
 
-DoApp::Err DoApp::initOfflineMode(const char *inputFilename, const char *outputFilename) {
+BodyTrack::Err BodyTrack::initOfflineMode(const char *inputFilename, const char *outputFilename) {
   if (cap.open(inputFilename)) {
     inputWidth = (int)cap.get(CV_CAP_PROP_FRAME_WIDTH);
     inputHeight = (int)cap.get(CV_CAP_PROP_FRAME_HEIGHT);
@@ -853,8 +853,8 @@ DoApp::Err DoApp::initOfflineMode(const char *inputFilename, const char *outputF
   return Err::errNone;
 }
 
-DoApp::Err DoApp::fitFaceModel() {
-  DoApp::Err doErr = errNone;
+BodyTrack::Err BodyTrack::fitFaceModel() {
+  BodyTrack::Err doErr = errNone;
   nvErr = face_ar_engine.fitFaceModel(frame);
   if (FLAG_captureOutputs) {
     writeFrameAndEstResults(frame, face_ar_engine.output_bboxes, face_ar_engine.getLandmarks());
@@ -907,7 +907,7 @@ DoApp::Err DoApp::fitFaceModel() {
   return doErr;
 }
 
-DoApp::DoApp() {
+BodyTrack::BodyTrack() {
   // Make sure things are initialized properly
   gApp = this;
   drawVisualization = true;
@@ -924,7 +924,7 @@ DoApp::DoApp() {
   poseFile = nullptr;
 }
 
-DoApp::~DoApp() {
+BodyTrack::~BodyTrack() {
   static const char termJsFile[] = { "\n  ]\n}\n" };
   if (exprFile)  { fprintf(exprFile,  termJsFile); fclose(exprFile);  }
   if (shapeFile) { fprintf(shapeFile, termJsFile); fclose(shapeFile); }
@@ -943,7 +943,7 @@ int chooseGPU() {
 
 }
 
-void DoApp::getFPS() {
+void BodyTrack::getFPS() {
   const float timeConstant = 16.f;
   frameTimer.stop();
   float t = (float)frameTimer.elapsedTimeFloat();
@@ -958,7 +958,7 @@ void DoApp::getFPS() {
   frameTimer.start();
 }
 
-void DoApp::drawFPS(cv::Mat &img) {
+void BodyTrack::drawFPS(cv::Mat &img) {
   getFPS();
   if (frameTime && showFPS) {
     char buf[32];
@@ -968,20 +968,20 @@ void DoApp::drawFPS(cv::Mat &img) {
   }
 }
 
-void DoApp::drawKalmanStatus(cv::Mat &img) {
+void BodyTrack::drawKalmanStatus(cv::Mat &img) {
   char buf[32];
   snprintf(buf, sizeof(buf), "Kalman %s", (face_ar_engine.bStabilizeFace ? "on" : "off"));
   cv::putText(img, buf, cv::Point(10, img.rows - 40), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255), 1);
 }
 
-void DoApp::drawVideoCaptureStatus(cv::Mat &img) {
+void BodyTrack::drawVideoCaptureStatus(cv::Mat &img) {
   char buf[32];
   snprintf(buf, sizeof(buf), "Video Capturing %s", (captureVideo ? "on" : "off"));
   cv::putText(img, buf, cv::Point(10, img.rows - 70), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255), 1);
 }
 
-DoApp::Err DoApp::run() {
-  DoApp::Err doErr = errNone;
+BodyTrack::Err BodyTrack::run() {
+  BodyTrack::Err doErr = errNone;
 
   FaceEngine::Err err = face_ar_engine.initFeatureIOParams();
   if (err != FaceEngine::Err::errNone ) {
@@ -993,8 +993,8 @@ DoApp::Err DoApp::run() {
     if (frame.empty() && FLAG_offlineMode) {
       // We have reached the end of the video
       // so return without any error.
-      return DoApp::errNone;
-    } else if (doErr != DoApp::errNone) {
+      return BodyTrack::errNone;
+    } else if (doErr != BodyTrack::errNone) {
       return doErr;
     }
     if (face_ar_engine.appMode == FaceEngine::mode::faceDetection) {
@@ -1004,7 +1004,7 @@ DoApp::Err DoApp::run() {
     } else if (face_ar_engine.appMode == FaceEngine::mode::faceMeshGeneration) {
       doErr = fitFaceModel();
     }
-    if (DoApp::errCancel == doErr || DoApp::errVideo == doErr) return doErr;
+    if (BodyTrack::errCancel == doErr || BodyTrack::errVideo == doErr) return doErr;
     if (!frame.empty() && !FLAG_offlineMode) {
       if (drawVisualization) {
         drawFPS(frame);
@@ -1025,7 +1025,7 @@ DoApp::Err DoApp::run() {
   return doErr;
 }
 
-DoApp::Err DoApp::setProxyWireframe(const char *path) {
+BodyTrack::Err BodyTrack::setProxyWireframe(const char *path) {
   std::ifstream file(path);
   if (!file.is_open()) return errFaceModelInit;
   std::string lineBuf;
@@ -1042,7 +1042,7 @@ DoApp::Err DoApp::setProxyWireframe(const char *path) {
   return errNone;
 }
 
-const char *DoApp::errorStringFromCode(DoApp::Err code) {
+const char *BodyTrack::errorStringFromCode(BodyTrack::Err code) {
   struct LUTEntry {
     Err code;
     const char *str;
@@ -1088,15 +1088,15 @@ int main(int argc, char **argv) {
   // Parse the arguments
   if (0 != ParseMyArgs(argc, argv)) return -100;
 
-  DoApp app;
-  DoApp::Err doErr = DoApp::Err::errNone;
+  BodyTrack app;
+  BodyTrack::Err doErr = BodyTrack::Err::errNone;
 
-  app.face_ar_engine.setAppMode(FaceEngine::mode(FLAG_appMode));
+  app.face_ar_engine.setAppMode(FaceEngine::mode(APP_MODE));
 
   if (FLAG_verbose) printf("Enable temporal optimizations in detecting face and landmarks = %d\n", FLAG_temporal);
   app.face_ar_engine.setFaceStabilization(FLAG_temporal);
 
-  doErr = DoApp::errFaceModelInit;
+  doErr = BodyTrack::errFaceModelInit;
   if (FLAG_modelPath.empty()) {
     printf("WARNING: Model path not specified. Please set --model_path=/path/to/trt/and/face/models, "
       "SDK will attempt to load the models from NVAR_MODEL_DIR environment variable, "
@@ -1107,7 +1107,7 @@ int main(int argc, char **argv) {
 
   if (FLAG_offlineMode) {
     if (FLAG_inFile.empty()) {
-      doErr = DoApp::errMissing;
+      doErr = BodyTrack::errMissing;
       printf("ERROR: %s, please specify input file using --in_file or --in \n", app.errorStringFromCode(doErr));
       goto bail;
     }
@@ -1118,7 +1118,7 @@ int main(int argc, char **argv) {
   BAIL_IF_ERR(doErr);
 
   if ((FLAG_landmarkMode < 0) | (FLAG_landmarkMode > 1)){
-    doErr = DoApp::errParameter;
+    doErr = BodyTrack::errParameter;
     printf("ERROR: %s, Please Select Either Mode 0 or 1! \n", app.errorStringFromCode(doErr));
   }
 

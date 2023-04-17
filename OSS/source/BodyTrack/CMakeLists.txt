@@ -1,13 +1,19 @@
 set(SOURCE_FILES 
 	BodyEngine.cpp 
 	BodyTrack.cpp 
-	../utils/RenderingUtils.cpp 
 	Timer.cpp
+	../utils/RenderingUtils.cpp 
+	../utils/SharedMem/UT_Mutex.cpp
+	../utils/SharedMem/UT_SharedMem.cpp
 )
 set(HEADER_FILES 
 	BodyEngine.h
-	DoApp.h
+	BodyTrack.h
 	Timer.h
+	../utils/SharedMem/UT_Mutex.h
+	../utils/SharedMem/UT_SharedMem.h
+	../utils/SharedMem/TOP_SharedMemHeader.h
+	../utils/SharedMem/CHOP_SharedMemHeader.h
 )
 
 if(MSVC)
@@ -37,7 +43,6 @@ if(MSVC)
 	set(ARSDK_PATH_STR ${CMAKE_CURRENT_SOURCE_DIR}/../../bin)
 	set(OPENCV_PATH_STR ${CMAKE_CURRENT_SOURCE_DIR}/../external/opencv/bin)
 	set(PATH_STR "PATH=%PATH%" ${OPENCV_PATH_STR})
-	set(CMD_ARG_STR "--model_path=\"${CMAKE_CURRENT_SOURCE_DIR}/../../bin/models\"")
 	set_target_properties(
 		BodyTrack PROPERTIES 
 		FOLDER SampleApps 

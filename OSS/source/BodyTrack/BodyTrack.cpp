@@ -33,13 +33,18 @@
 
 // nvidia maxine
 #include "BodyEngine.h"
+#include "BodyTrack.h"
 #include "RenderingUtils.h"
 #include "nvAR.h"
 #include "nvAR_defs.h"
 #include "opencv2/opencv.hpp"
 
+// touchdesigner shared memory
+#include "SharedMem/TOP_SharedMemHeader.h"
+#include "SharedMem/UT_Mutex.h"
+#include "SharedMem/UT_SharedMem.h"
+
 // helper classes
-#include "DoApp.h"
 #include "Timer.h"
 
 #if CV_MAJOR_VERSION >= 4
@@ -123,12 +128,19 @@ enum {
 	myErrTexture = -3,
 };
 
+// colors for drawing to window
 static const cv::Scalar cv_colors[] = { cv::Scalar(0, 0, 255), cv::Scalar(0, 255, 0), cv::Scalar(255, 0, 0) };
-
 enum {
 	kColorRed = 0,
 	kColorGreen = 1,
 	kColorBlue = 2
+};
+
+// video source for frame data
+enum {
+	webcam = 0,
+	videoFile = 1,
+	sharedMemory = 2
 };
 
 // style guide for drawing bounding box, skeleton joints, and text
@@ -149,35 +161,50 @@ const int DEBUG_FONT_THICKNESS = 1;
 const float TIME_CONSTANT = 16.f;
 const float FRAMETIME_THRESHOLD = 100.f;
 
+// Made the executive decision that we only want to track multiple people and not limit outselves to only one user at a time
+const bool ENABLE_MULTI_PEOPLE_TRACKING = true;		
+// Made the executive decision that we default to keypoint detection, which includes body detection
+const unsigned int APP_MODE = 1;			
+// Optimizes the results for temporal input frames. Not possible for multi-person tracking, so must be false.
+const bool TEMPORAL_SMOOTHING = false;		
+
+// shared memory
+UT_SharedMem* shm;							// shared memory
+TOP_SharedMemHeader* topHeader;				// TOP_SharedMemHeader.h
+cv::Mat tempFrame;							// for converting touch shared mem to opencv mat
+int width, height;							// size of image from shared memory
+
 /********************************************************************************
  * command-line arguments
  ********************************************************************************/
 
-bool 
-	FLAG_debug = false, 
-	FLAG_verbose = false, 
-	FLAG_temporal = true, 
-	FLAG_captureOutputs = false,
-	FLAG_offlineMode = false, 
-	FLAG_useCudaGraph = true,
-	FLAG_enablePeopleTracking = false;
+bool
+	FLAG_showFPS = true,					// Write FPS debug information to window
+	FLAG_drawVisualization = true,			// Draw keypoint and bounding box data to window
+	FLAG_debug = false,						// Print debugging information to the console
+	FLAG_verbose = false,					// Print extra information to the console
+	FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file
+	FLAG_offlineMode = false,				// False: Webcam, True: Video file --> specifies whether to use offline video or an online camera video as the input
+	FLAG_useCudaGraph = true;				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
+bool captureFrame = false, captureVideo = false;
 
 std::string 
 	FLAG_outDir, 
 	FLAG_inFile, 
 	FLAG_outFile, 
-	FLAG_modelPath, 
+	FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",
 	FLAG_captureCodec = "avc1", 
 	FLAG_camRes, 
-	FLAG_bodyModel;
+	FLAG_bodyModel,
+	FLAG_sharedMemName = "TOPshm";
 
-unsigned int 
-	FLAG_appMode = 1, 
-	FLAG_mode = 1, 
-	FLAG_camindex = 0, 
-	FLAG_shadowTrackingAge = 90, 
-	FLAG_probationAge = 10, 
-	FLAG_maxTargetsTracked = 30;
+unsigned int
+	FLAG_chosenGPU = 0,						// Index of GPU to run the Maxine executable
+	FLAG_mode = 1,							// 0: High Quality, 1: High Performance -> default to high performance
+	FLAG_camIndex = 0,						// Index of webcam connected to the PC
+	FLAG_shadowTrackingAge = 90,			// Sets the Shadow Tracking Age for Multi-Person Tracking, the default value is 90 (frames).
+	FLAG_probationAge = 10,					// Sets the Probation Age for Multi-Person tracking, the default value is 10 (frames).
+	FLAG_maxTargetsTracked = 30;			// Sets the Maxinum Targets Tracked. The default value is 30, and the minimum is value is 1.
 
 /********************************************************************************
  * parsing command line args
@@ -187,26 +214,75 @@ static void Usage() {
 	printf(
 		"BodyTrack [<args> ...]\n"
 		"where <args> is\n"
-		" --verbose[=(true|false)]				Report interesting info\n"
 		" --debug[=(true|false)]				Report debugging info\n"
-		" --temporal[=(true|false)]				Temporally optimize body rect and keypoints\n"
+		" --verbose[=(true|false)]				Report interesting info\n"
 		" --use_cuda_graph[=(true|false)]		Enable faster execution by using cuda graph to capture engine execution\n"
-		" --capture_outputs[=(true|false)]		Enables video/image capture and writing body detection/keypoints outputs\n"
-		" --offline_mode[=(true|false)]			Disables webcam, reads video from file and writes output video results\n"
+		" --capture_outputs[=(true|false)]		Enables video/image capture and writing body detection/keypoints outputs to file\n"
+		" --offline_mode[=(true|false)]			Disables webcam, reads video from file, and writes output video results to file\n"
 		" --cam_res=[WWWx]HHH					Specify resolution as height or width x height\n"
-		" --in_file=<file>						Specify the  input file\n"
+		" --cam_index[=0,1,2,3,...]				Specify the webcam index we want to use for the video feed\n"
+		" --in_file=<file>						Specify the input file\n"
 		" --codec=<fourcc>						FOURCC code for the desired codec (default H264)\n"
-		" --in=<file>							Specify the  input file\n"
+		" --in=<file>							Specify the input file\n"
 		" --out_file=<file>						Specify the output file\n"
 		" --out=<file>							Specify the output file\n"
 		" --model_path=<path>					Specify the directory containing the TRT models\n"
 		" --mode[=0|1]							Model Mode. 0: High Quality, 1: High Performance\n"
-		" --app_mode[=(0|1)]					App mode. 0: Body detection, 1: Keypoint detection\n "
 		" --enable_people_tracking[=(0|1)]		Enables people tracking\n "
 		" --shadow_tracking_age					Shadow Tracking Age after which tracking information of a person is removed. Measured in frames\n"
 		" --probation_age						Length of probationary period. Measured in frames\n"
 		" --max_targets_tracked					Maximum number of targets to be tracked\n"
 		" --benchmarks[=<pattern>]				Run benchmarks\n");
+}
+
+static int ParseMyArgs(int argc, char** argv) {
+	int errs = 0;
+	for (--argc, ++argv; argc--; ++argv) {
+		bool help;
+		const char* arg = *argv;
+		if (arg[0] != '-') {
+			continue;
+		}
+		else if ((arg[1] == '-') && (
+			GetFlagArgVal("verbose", arg, &FLAG_verbose) || 
+			GetFlagArgVal("debug", arg, &FLAG_debug) ||
+			GetFlagArgVal("in", arg, &FLAG_inFile) || 
+			GetFlagArgVal("in_file", arg, &FLAG_inFile) ||
+			GetFlagArgVal("out", arg, &FLAG_outFile) || 
+			GetFlagArgVal("out_file", arg, &FLAG_outFile) ||
+			GetFlagArgVal("offline_mode", arg, &FLAG_offlineMode) ||
+			GetFlagArgVal("capture_outputs", arg, &FLAG_captureOutputs) ||
+			GetFlagArgVal("cam_res", arg, &FLAG_camRes) || 
+			GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
+			GetFlagArgVal("cam_index", arg, &FLAG_camIndex) ||
+			GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
+			GetFlagArgVal("mode", arg, &FLAG_mode) ||
+			GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph) ||
+			GetFlagArgVal("shadow_tracking_age", arg, &FLAG_shadowTrackingAge) ||
+			GetFlagArgVal("probation_age", arg, &FLAG_probationAge) ||
+			GetFlagArgVal("max_targets_tracked", arg, &FLAG_maxTargetsTracked) 
+		)) {
+			continue;
+		}
+		else if (GetFlagArgVal("help", arg, &help)) {
+			Usage();
+		}
+		else if (arg[1] != '-') {
+			for (++arg; *arg; ++arg) {
+				if (*arg == 'v') {
+					FLAG_verbose = true;
+				}
+				else {
+					// printf("Unknown flag: \"-%c\"\n", *arg);
+				}
+			}
+			continue;
+		}
+		else {
+			// printf("Unknown flag: \"%s\"\n", arg);
+		}
+	}
+	return errs;
 }
 
 static bool GetFlagArgVal(const char* flag, const char* arg, const char** val) {
@@ -267,59 +343,11 @@ static bool GetFlagArgVal(const char* flag, const char* arg, unsigned* val) {
 	return success;
 }
 
-static int ParseMyArgs(int argc, char** argv) {
-	int errs = 0;
-	for (--argc, ++argv; argc--; ++argv) {
-		bool help;
-		const char* arg = *argv;
-		if (arg[0] != '-') {
-			continue;
-		}
-		else if ((arg[1] == '-') &&
-			(GetFlagArgVal("verbose", arg, &FLAG_verbose) || GetFlagArgVal("debug", arg, &FLAG_debug) ||
-				GetFlagArgVal("in", arg, &FLAG_inFile) || GetFlagArgVal("in_file", arg, &FLAG_inFile) ||
-				GetFlagArgVal("out", arg, &FLAG_outFile) || GetFlagArgVal("out_file", arg, &FLAG_outFile) ||
-				GetFlagArgVal("offline_mode", arg, &FLAG_offlineMode) ||
-				GetFlagArgVal("capture_outputs", arg, &FLAG_captureOutputs) ||
-				GetFlagArgVal("cam_res", arg, &FLAG_camRes) || GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
-				GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
-				GetFlagArgVal("app_mode", arg, &FLAG_appMode) ||
-				GetFlagArgVal("mode", arg, &FLAG_mode) ||
-				GetFlagArgVal("camindex", arg, &FLAG_camindex) ||
-				GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph) ||
-				GetFlagArgVal("enable_people_tracking", arg, &FLAG_enablePeopleTracking) ||
-				GetFlagArgVal("shadow_tracking_age", arg, &FLAG_shadowTrackingAge) ||
-				GetFlagArgVal("probation_age", arg, &FLAG_probationAge) ||
-				GetFlagArgVal("max_targets_tracked", arg, &FLAG_maxTargetsTracked) ||
-				GetFlagArgVal("temporal", arg, &FLAG_temporal))) {
-			continue;
-		}
-		else if (GetFlagArgVal("help", arg, &help)) {
-			Usage();
-		}
-		else if (arg[1] != '-') {
-			for (++arg; *arg; ++arg) {
-				if (*arg == 'v') {
-					FLAG_verbose = true;
-				}
-				else {
-					// printf("Unknown flag: \"-%c\"\n", *arg);
-				}
-			}
-			continue;
-		}
-		else {
-			// printf("Unknown flag: \"%s\"\n", arg);
-		}
-	}
-	return errs;
-}
-
 /********************************************************************************
  * error codes
  ********************************************************************************/
 
-const char* DoApp::errorStringFromCode(DoApp::Err code) {
+const char* BodyTrack::errorStringFromCode(BodyTrack::Err code) {
 	struct LUTEntry {
 		Err code;
 		const char* str;
@@ -355,6 +383,26 @@ const char* DoApp::errorStringFromCode(DoApp::Err code) {
 	static char msg[18];
 	snprintf(msg, sizeof(msg), "error #%d", code);
 	return msg;
+}
+
+/********************************************************************************
+ * CUDA GPU selection
+ ********************************************************************************/
+
+int chooseGPU() {
+	// If the system has multiple supported GPUs then the application
+	// should use CUDA driver APIs or CUDA runtime APIs to enumerate
+	// the GPUs and select one based on the application's requirements
+
+	if (FLAG_useCudaGraph) {
+		printf("Chosen GPU: %d\n", FLAG_chosenGPU);
+		// TODO: set CUDA device:
+		//cudaError_t err = cudaSetDevice(FLAG_chosenGPU);
+		return 0;
+	}
+	else {
+		return 0;
+	}
 }
 
 /********************************************************************************
@@ -395,20 +443,16 @@ std::string getCalendarTime() {
 }
 
 /********************************************************************************
- * DoApp
+ * BodyTrack class
  ********************************************************************************/
 
-DoApp* gApp = nullptr;
-const char DoApp::windowTitle[] = "Envoy Maxine BodyTrack";
+BodyTrack* gApp = nullptr;
+const char BodyTrack::windowTitle[] = "Envoy Maxine BodyTrack";
 char* g_nvARSDKPath = NULL;
 
-DoApp::DoApp() {
+BodyTrack::BodyTrack() {
 	// Make sure things are initialized properly
 	gApp = this;
-	drawVisualization = true;
-	showFPS = false;
-	captureVideo = false;
-	captureFrame = false;
 	frameTime = 0;
 	frameIndex = 0;
 	nvErr = BodyEngine::errNone;
@@ -416,110 +460,13 @@ DoApp::DoApp() {
 	scaleOffsetXY[1] = scaleOffsetXY[3] = 0.f;
 }
 
-DoApp::~DoApp() {}
+BodyTrack::~BodyTrack() {}
 
 /********************************************************************************
  * draw joints, bones, boxes, data to window
  ********************************************************************************/
 
-void DoApp::DrawBBoxes(const cv::Mat& src, NvAR_Rect* output_bbox) {
-	cv::Point rectPoint1, rectPoint2;
-	float x, y, width, height;
-
-	cv::Mat frm = (FLAG_offlineMode) ? src.clone() : src;
-
-	if (output_bbox) {
-		// extract bounding box data 
-		x = output_bbox->x;
-		y = output_bbox->y;
-		width = output_bbox->width;
-		height = output_bbox->height;
-
-		// draw bounding box
-		rectPoint1 = cv::Point(lround(x), lround(y));
-		rectPoint2 = cv::Point(lround(x + width), lround(y + height));
-		cv::rectangle(frame, rectPoint1, rectPoint2, RECT_COLOR, RECT_THICKNESS);
-	}
-
-	// write output video to file
-	if (FLAG_offlineMode) 
-		bodyDetectOutputVideo.write(frm);
-}
-
-void DoApp::DrawBBoxes(const cv::Mat& src, NvAR_BBoxes* output_bbox) {
-	cv::Point rectPoint1, rectPoint2;
-	float x, y, width, height;
-
-	// get frame and user data
-	cv::Mat frm = (FLAG_offlineMode) ? src.clone() : src;	
-	int numTrackedUsers = output_bbox->num_boxes;
-
-	// if there are users to track...
-	if (output_bbox) {
-		// draw a box for each detected person
-		for (int i = 0; i < numTrackedUsers; i++) {
-			// extract bounding box data 
-			x = output_bbox->boxes[i].x;
-			y = output_bbox->boxes[i].y;
-			width = output_bbox->boxes[i].width;
-			height = output_bbox->boxes[i].height;
-
-			// draw bounding box
-			rectPoint1 = cv::Point(lround(x), lround(y));
-			rectPoint2 = cv::Point(lround(x + width), lround(y + height));
-			cv::rectangle(frame, rectPoint1, rectPoint2, RECT_COLOR, RECT_THICKNESS);
-		}
-	}
-
-	// write output video to file
-	if (FLAG_offlineMode) 
-		bodyDetectOutputVideo.write(frm);
-}
-
-void DoApp::DrawBBoxes(const cv::Mat& src, NvAR_TrackingBBoxes* output_bbox) {
-	cv::Point circleCenter, rectPoint1, rectPoint2, textCenter;
-	float x, y, width, height;
-	int trackingID;
-
-	// get frame and user data
-	cv::Mat frame = (FLAG_offlineMode) ? src.clone() : src;
-	int numTrackedUsers = output_bbox->num_boxes;
-
-	// if there is at least one user to track...
-	if (output_bbox) {
-
-		// draw a box and id number for each detected person
-		for (int i = 0; i < numTrackedUsers; i++) {
-			// extract bounding box data
-			x = output_bbox->boxes[i].bbox.x;
-			y = output_bbox->boxes[i].bbox.y;
-			width = output_bbox->boxes[i].bbox.width;
-			height = output_bbox->boxes[i].bbox.height;
-			trackingID = output_bbox->boxes[i].tracking_id;
-
-			if (colorCodes.size() <= trackingID)
-				colorCodes.push_back(cv::Scalar(rand() & 0xFF, rand() & 0xFF, rand() & 0xFF));
-
-			auto color = colorCodes[trackingID];
-
-			// draw bounding box
-			rectPoint1 = cv::Point(lround(x), lround(y));
-			rectPoint2 = cv::Point(lround(x + width), lround(y + height));
-			cv::rectangle(frame, rectPoint1, rectPoint2, color, RECT_THICKNESS);
-
-			// draw id number
-			std::string text = "ID: " + std::to_string(trackingID);
-			textCenter = cv::Point(lround(x), lround(y) + ID_TEXT_OFFSET_Y);
-			cv::putText(frame, text, textCenter, FONT_FACE, ID_FONT_SCALE, color, ID_FONT_THICKNESS);
-		}
-	}
-
-	// write output video to file
-	if (FLAG_offlineMode) 
-		bodyDetectOutputVideo.write(frame);
-}
-
-void DoApp::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, int numKeyPoints, NvAR_TrackingBBoxes* output_bbox) {
+void BodyTrack::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, int numKeyPoints, NvAR_TrackingBBoxes* output_bbox) {
 	NvAR_Point2f* pt, * endPt;
 	NvAR_Point2f* keypointsBatch8 = keypoints;
 	cv::Point circleCenter, rectPoint1, rectPoint2, textCenter;
@@ -527,7 +474,7 @@ void DoApp::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, i
 	int trackingID;
 
 	// get frame and user data
-	cv::Mat frame = (FLAG_offlineMode) ? src.clone() : src;
+	cv::Mat frm = (FLAG_offlineMode) ? src.clone() : src;
 	int numTrackedUsers = body_ar_engine.output_tracking_bboxes.num_boxes;
 
 	// draw bounding box and id number for each tracked user 
@@ -538,7 +485,7 @@ void DoApp::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, i
 
 		for (endPt = (pt = (NvAR_Point2f*)keypoints) + numKeyPoints; pt < endPt; ++pt) {
 			circleCenter = cv::Point(lround(pt->x), lround(pt->y));
-			cv::circle(frame, circleCenter, CIRCLE_RADIUS, CIRCLE_COLOR, CIRCLE_THICKNESS);
+			cv::circle(frm, circleCenter, CIRCLE_RADIUS, CIRCLE_COLOR, CIRCLE_THICKNESS);
 		}
 
 		if (output_bbox) {
@@ -556,70 +503,24 @@ void DoApp::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, i
 			auto rectColor = colorCodes[trackingID];
 			rectPoint1 = cv::Point(lround(x), lround(y));
 			rectPoint2 = cv::Point(lround(x + width), lround(y + height));
-			cv::rectangle(frame, rectPoint1, rectPoint2, rectColor, RECT_THICKNESS);
+			cv::rectangle(frm, rectPoint1, rectPoint2, rectColor, RECT_THICKNESS);
 
 			// draw id number
 			std::string text = "ID: " + std::to_string(trackingID);
 			textCenter = cv::Point(lround(x), lround(y) + ID_TEXT_OFFSET_Y);
-			cv::putText(frame, text, textCenter, FONT_FACE, ID_FONT_SCALE, rectColor, ID_FONT_THICKNESS);
+			cv::putText(frm, text, textCenter, FONT_FACE, ID_FONT_SCALE, rectColor, ID_FONT_THICKNESS);
 		}
 
 		// draw joint + bone data
-		DrawKeyPointLine(frame, keypoints);
+		DrawKeyPointLine(frm, keypoints);
 	}
 
 	// write output video to file
 	if (FLAG_offlineMode) 
-		keyPointsOutputVideo.write(frame);
+		keyPointsOutputVideo.write(frm);
 }
 
-void DoApp::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, int numKeyPoints, NvAR_BBoxes* output_bbox) {
-	NvAR_Point2f* pt, * endPt;
-	NvAR_Point2f* keypointsBatch8 = keypoints;
-	cv::Point circleCenter, rectPoint1, rectPoint2, textCenter;	
-	float x, y, width, height;
-	int trackingID;
-
-	// get frame and user data
-	cv::Mat frame = (FLAG_offlineMode) ? src.clone() : src;
-	int numTrackedUsers = body_ar_engine.output_bboxes.num_boxes;
-
-	// draw bounding box for each tracked user 
-	for (int i = 0; i < numTrackedUsers; i++) {
-
-		keypoints = keypointsBatch8 + (i * NUM_KEYPOINTS);
-
-		for (endPt = (pt = (NvAR_Point2f*)keypoints) + numKeyPoints; pt < endPt; ++pt) {
-			circleCenter = cv::Point(lround(pt->x), lround(pt->y));
-			cv::circle(frame, circleCenter, CIRCLE_RADIUS, CIRCLE_COLOR, CIRCLE_THICKNESS);
-		}
-
-		if (output_bbox) {
-			// extract bounding box data 
-			x = output_bbox->boxes[i].x;
-			y = output_bbox->boxes[i].y;
-			width = output_bbox->boxes[i].width;
-			height = output_bbox->boxes[i].height;
-
-			// draw rectangle
-			rectPoint1 = cv::Point(lround(x), lround(y));
-			rectPoint2 = cv::Point(lround(x + width), lround(y + height));
-			cv::rectangle(frame, rectPoint1, rectPoint2, RECT_COLOR, RECT_THICKNESS);
-		}
-
-		// draw joint + bone data
-		DrawKeyPointLine(frame, keypoints);
-	}
-
-	// write output video to file
-	if (FLAG_offlineMode) 
-		keyPointsOutputVideo.write(frame);
-}
-
-/**
- * Draw lines to connect all 34 joints and create "bones"
- */
-void DoApp::DrawKeyPointLine(cv::Mat& frm, NvAR_Point2f* keypoints) {
+void BodyTrack::DrawKeyPointLine(cv::Mat& frm, NvAR_Point2f* keypoints) {
 	// center body
 	drawKeyPointLine(frm, keypoints, PELVIS, TORSO, kColorGreen);
 	drawKeyPointLine(frm, keypoints, TORSO, NECK, kColorGreen);
@@ -668,7 +569,8 @@ void DoApp::DrawKeyPointLine(cv::Mat& frm, NvAR_Point2f* keypoints) {
 	drawKeyPointLine(frm, keypoints, NOSE, LEFT_EYE, kColorGreen);
 	drawKeyPointLine(frm, keypoints, LEFT_EYE, LEFT_EAR, kColorGreen);
 }
-void DoApp::drawKeyPointLine(const cv::Mat& src, NvAR_Point2f* keypoints, int joint1, int joint2, int color) {
+
+void BodyTrack::drawKeyPointLine(const cv::Mat& src, NvAR_Point2f* keypoints, int joint1, int joint2, int color) {
 	// extract line start + end data
 	NvAR_Point2f point1_pos = *(keypoints + joint1);
 	NvAR_Point2f point2_pos = *(keypoints + joint2);
@@ -682,146 +584,7 @@ void DoApp::drawKeyPointLine(const cv::Mat& src, NvAR_Point2f* keypoints, int jo
  * write data to file
  ********************************************************************************/
 
-void DoApp::writeVideoAndEstResults(const cv::Mat& frm, NvAR_BBoxes output_bboxes, NvAR_Point2f* keypoints) {
-	if (captureVideo) {
-		if (!capturedVideo.isOpened()) {
-			const std::string currentCalendarTime = getCalendarTime();
-			const std::string capturedOutputFileName = currentCalendarTime + ".mp4";
-			getFPS();
-			if (frameTime) {
-				float fps = (float)(1.0 / frameTime);
-				capturedVideo.open(capturedOutputFileName, StringToFourcc(FLAG_captureCodec), fps,
-					cv::Size(frm.cols, frm.rows));
-				if (!capturedVideo.isOpened()) {
-					std::cout << "Error: Could not open video: \"" << capturedOutputFileName << "\"\n";
-					return;
-				}
-				if (FLAG_verbose) {
-					std::cout << "Capturing video started" << std::endl;
-				}
-			}
-			else {  // If frameTime is 0.f, returns without writing the frame to the Video
-				return;
-			}
-			const std::string outputsFileName = currentCalendarTime + ".txt";
-			bodyEngineVideoOutputFile.open(outputsFileName, std::ios_base::out);
-			if (!bodyEngineVideoOutputFile.is_open()) {
-				std::cout << "Error: Could not open file: \"" << outputsFileName << "\"\n";
-				return;
-			}
-			std::string keyPointDetectionMode = (keypoints == NULL) ? "Off" : "On";
-			bodyEngineVideoOutputFile << "// BodyDetectOn, KeyPointDetect" << keyPointDetectionMode << "\n ";
-			bodyEngineVideoOutputFile
-				<< "// kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumLMs, [lm_x, lm_y]{kNumLMs}\n";
-		}
-		// Write each frame to the Video
-		capturedVideo << frm;
-		writeEstResults(bodyEngineVideoOutputFile, output_bboxes, keypoints);
-	}
-	else {
-		if (capturedVideo.isOpened()) {
-			if (FLAG_verbose) {
-				std::cout << "Capturing video ended" << std::endl;
-			}
-			capturedVideo.release();
-			if (bodyEngineVideoOutputFile.is_open()) bodyEngineVideoOutputFile.close();
-		}
-	}
-}
-
-void DoApp::writeVideoAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints) {
-	if (captureVideo) {
-		if (!capturedVideo.isOpened()) {
-			const std::string currentCalendarTime = getCalendarTime();
-			const std::string capturedOutputFileName = currentCalendarTime + ".mp4";
-			getFPS();
-			if (frameTime) {
-				float fps = (float)(1.0 / frameTime);
-				capturedVideo.open(capturedOutputFileName, StringToFourcc(FLAG_captureCodec), fps,
-					cv::Size(frm.cols, frm.rows));
-				if (!capturedVideo.isOpened()) {
-					std::cout << "Error: Could not open video: \"" << capturedOutputFileName << "\"\n";
-					return;
-				}
-				if (FLAG_verbose) {
-					std::cout << "Capturing video started" << std::endl;
-				}
-			}
-			else {  // If frameTime is 0.f, returns without writing the frame to the Video
-				return;
-			}
-			const std::string outputsFileName = currentCalendarTime + ".txt";
-			bodyEngineVideoOutputFile.open(outputsFileName, std::ios_base::out);
-			if (!bodyEngineVideoOutputFile.is_open()) {
-				std::cout << "Error: Could not open file: \"" << outputsFileName << "\"\n";
-				return;
-			}
-			std::string keyPointDetectionMode = (keypoints == NULL) ? "Off" : "On";
-			bodyEngineVideoOutputFile << "// BodyDetectOn, KeyPointDetect" << keyPointDetectionMode << "\n ";
-			bodyEngineVideoOutputFile
-				<< "// kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumLMs, [lm_x, lm_y]{kNumLMs}\n";
-		}
-		// Write each frame to the Video
-		capturedVideo << frm;
-		writeEstResults(bodyEngineVideoOutputFile, output_bboxes, keypoints);
-	}
-	else {
-		if (capturedVideo.isOpened()) {
-			if (FLAG_verbose) {
-				std::cout << "Capturing video ended" << std::endl;
-			}
-			capturedVideo.release();
-			if (bodyEngineVideoOutputFile.is_open()) bodyEngineVideoOutputFile.close();
-		}
-	}
-}
-
-void DoApp::writeEstResults(std::ofstream& outputFile, NvAR_BBoxes output_bboxes, NvAR_Point2f* keypoints) {
-	/**
-	 * Output File Format :
-	 * BodyDetectOn, KeyPointDetectOn
-	 * kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumKPs, [j_x, j_y]{kNumKPs}
-	 */
-
-	int bodyDetectOn = (body_ar_engine.appMode == BodyEngine::mode::bodyDetection ||
-		body_ar_engine.appMode == BodyEngine::mode::keyPointDetection)
-		? 1
-		: 0;
-	int keyPointDetectOn = (body_ar_engine.appMode == BodyEngine::mode::keyPointDetection)
-		? 1
-		: 0;
-	outputFile << bodyDetectOn << "," << keyPointDetectOn << "\n";
-
-	if (bodyDetectOn && output_bboxes.num_boxes) {
-		// Append number of bodies detected in the current frame
-		outputFile << unsigned(output_bboxes.num_boxes) << ",";
-		// write outputbboxes to outputFile
-		for (size_t i = 0; i < output_bboxes.num_boxes; i++) {
-			int x1 = (int)output_bboxes.boxes[i].x, y1 = (int)output_bboxes.boxes[i].y,
-				width = (int)output_bboxes.boxes[i].width, height = (int)output_bboxes.boxes[i].height;
-			outputFile << x1 << "," << y1 << "," << width << "," << height << ",";
-		}
-	}
-	else {
-		outputFile << "0,";
-	}
-	if (keyPointDetectOn && output_bboxes.num_boxes) {
-		int numKeyPoints = body_ar_engine.getNumKeyPoints();
-		// Append number of keypoints
-		outputFile << numKeyPoints << ",";
-		// Append 2 * number of keypoint values
-		NvAR_Point2f* pt, * endPt;
-		for (endPt = (pt = (NvAR_Point2f*)keypoints) + numKeyPoints; pt < endPt; ++pt)
-			outputFile << pt->x << "," << pt->y << ",";
-	}
-	else {
-		outputFile << "0,";
-	}
-
-	outputFile << "\n";
-}
-
-void DoApp::writeEstResults(std::ofstream& outputFile, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints) {
+void BodyTrack::writeEstResults(std::ofstream& outputFile, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints) {
 	/**
 	 * Output File Format :
 	 * BodyDetectOn, KeyPointDetectOn
@@ -867,32 +630,54 @@ void DoApp::writeEstResults(std::ofstream& outputFile, NvAR_TrackingBBoxes outpu
 	outputFile << "\n";
 }
 
-void DoApp::writeFrameAndEstResults(const cv::Mat& frm, NvAR_BBoxes output_bboxes, NvAR_Point2f* keypoints) {
-	if (captureFrame) {
-		const std::string currentCalendarTime = getCalendarTime();
-		const std::string capturedFrame = currentCalendarTime + ".png";
-		cv::imwrite(capturedFrame, frm);
-		if (FLAG_verbose) {
-			std::cout << "Captured the frame" << std::endl;
+void BodyTrack::writeVideoAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints) {
+	if (captureVideo) {
+		if (!capturedVideo.isOpened()) {
+			const std::string currentCalendarTime = getCalendarTime();
+			const std::string capturedOutputFileName = currentCalendarTime + ".mp4";
+			getFPS();
+			if (frameTime) {
+				float fps = (float)(1.0 / frameTime);
+				capturedVideo.open(capturedOutputFileName, StringToFourcc(FLAG_captureCodec), fps,
+					cv::Size(frm.cols, frm.rows));
+				if (!capturedVideo.isOpened()) {
+					std::cout << "Error: Could not open video: \"" << capturedOutputFileName << "\"\n";
+					return;
+				}
+				if (FLAG_verbose) {
+					std::cout << "Capturing video started" << std::endl;
+				}
+			}
+			else {  // If frameTime is 0.f, returns without writing the frame to the Video
+				return;
+			}
+			const std::string outputsFileName = currentCalendarTime + ".txt";
+			bodyEngineVideoOutputFile.open(outputsFileName, std::ios_base::out);
+			if (!bodyEngineVideoOutputFile.is_open()) {
+				std::cout << "Error: Could not open file: \"" << outputsFileName << "\"\n";
+				return;
+			}
+			std::string keyPointDetectionMode = (keypoints == NULL) ? "Off" : "On";
+			bodyEngineVideoOutputFile << "// BodyDetectOn, KeyPointDetect" << keyPointDetectionMode << "\n ";
+			bodyEngineVideoOutputFile
+				<< "// kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumLMs, [lm_x, lm_y]{kNumLMs}\n";
 		}
-		// Write Body Engine Outputs
-		const std::string outputFilename = currentCalendarTime + ".txt";
-		std::ofstream outputFile;
-		outputFile.open(outputFilename, std::ios_base::out);
-		if (!outputFile.is_open()) {
-			std::cout << "Error: Could not open file: \"" << outputFilename << "\"\n";
-			return;
+		// Write each frame to the Video
+		capturedVideo << frm;
+		writeEstResults(bodyEngineVideoOutputFile, output_bboxes, keypoints);
+	}
+	else {
+		if (capturedVideo.isOpened()) {
+			if (FLAG_verbose) {
+				std::cout << "Capturing video ended" << std::endl;
+			}
+			capturedVideo.release();
+			if (bodyEngineVideoOutputFile.is_open()) bodyEngineVideoOutputFile.close();
 		}
-		std::string keyPointDetectionMode = (keypoints == NULL) ? "Off" : "On";
-		outputFile << "// BodyDetectOn, KeyPointDetect" << keyPointDetectionMode << "\n";
-		outputFile << "// kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumLMs, [lm_x, lm_y]{kNumLMs}\n";
-		writeEstResults(outputFile, output_bboxes, keypoints);
-		if (outputFile.is_open()) outputFile.close();
-		captureFrame = false;
 	}
 }
 
-void DoApp::writeFrameAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints) {
+void BodyTrack::writeFrameAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints) {
 	if (captureFrame) {
 		const std::string currentCalendarTime = getCalendarTime();
 		const std::string capturedFrame = currentCalendarTime + ".png";
@@ -921,7 +706,7 @@ void DoApp::writeFrameAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes outp
  * draw stats to window
  ********************************************************************************/
 
-void DoApp::getFPS() {
+void BodyTrack::getFPS() {
 	frameTimer.stop();
 	float t = (float)frameTimer.elapsedTimeFloat();
 	if (t < FRAMETIME_THRESHOLD) {
@@ -936,32 +721,20 @@ void DoApp::getFPS() {
 	frameTimer.start();
 }
 
-void DoApp::drawFPS(cv::Mat& img) {
+void BodyTrack::drawFPS(cv::Mat& img) {
 	getFPS();
-	if (frameTime && showFPS) {
+	if (frameTime && FLAG_showFPS) {
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%.1f", 1. / frameTime);
 		cv::putText(img, buf, cv::Point(img.cols - 80, img.rows - 10), FONT_FACE, DEBUG_TEXT_SCALE, DEBUG_TEXT_COLOR, DEBUG_FONT_THICKNESS);
 	}
 }
 
-void DoApp::drawKalmanStatus(cv::Mat& img) {
-	char buf[32];
-	snprintf(buf, sizeof(buf), "Kalman %s", (body_ar_engine.bStabilizeBody ? "on" : "off"));
-	cv::putText(img, buf, cv::Point(10, img.rows - 40), FONT_FACE, DEBUG_TEXT_SCALE, DEBUG_TEXT_COLOR, DEBUG_FONT_THICKNESS);
-}
-
-void DoApp::drawVideoCaptureStatus(cv::Mat& img) {
-	char buf[32];
-	snprintf(buf, sizeof(buf), "Video Capturing %s", (captureVideo ? "on" : "off"));
-	cv::putText(img, buf, cv::Point(10, img.rows - 70), FONT_FACE, DEBUG_TEXT_SCALE, DEBUG_TEXT_COLOR, DEBUG_FONT_THICKNESS);
-}
-
 /********************************************************************************
- * acquire joints, bones, and boxes
+ * acquire joints keypoints and bounding boxes
  ********************************************************************************/
 
-DoApp::Err DoApp::acquireFrame() {
+BodyTrack::Err BodyTrack::acquireFrame() {
 	Err err = errNone;
 
 	// If the machine goes to sleep with the app running and then wakes up, the camera object is not destroyed but the
@@ -983,41 +756,7 @@ DoApp::Err DoApp::acquireFrame() {
 	return err;
 }
 
-DoApp::Err DoApp::acquireBodyBox() {
-	Err err = errNone;
-	NvAR_Rect output_bbox;
-
-	// get keypoints in  original image resolution coordinate space
-	unsigned n = body_ar_engine.acquireBodyBox(frame, output_bbox, 0);
-
-	if (n && FLAG_verbose) {
-		printf("BodyBox: [\n");
-		printf("%7.1f%7.1f%7.1f%7.1f\n", output_bbox.x, output_bbox.y, output_bbox.x + output_bbox.width,
-			output_bbox.y + output_bbox.height);
-		printf("]\n");
-	}
-	if (FLAG_captureOutputs) {
-		if (FLAG_enablePeopleTracking) {
-			writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes);
-			writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes);
-		}
-		else {
-			writeFrameAndEstResults(frame, body_ar_engine.output_bboxes);
-			writeVideoAndEstResults(frame, body_ar_engine.output_bboxes);
-		}
-	}
-	if (0 == n) 
-		return errNoBody;
-
-	if (drawVisualization) 
-		DrawBBoxes(frame, &output_bbox);
-	
-	frameIndex++;
-
-	return err;
-}
-
-DoApp::Err DoApp::acquireBodyBoxAndKeyPoints() {
+BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 	Err err = errNone;
 	int numKeyPoints = body_ar_engine.getNumKeyPoints();
 	NvAR_BBoxes output_bbox;
@@ -1026,19 +765,13 @@ DoApp::Err DoApp::acquireBodyBoxAndKeyPoints() {
 	std::vector<NvAR_Point3f> keypoints3D(numKeyPoints * 8);
 	std::vector<NvAR_Quaternion> jointAngles(numKeyPoints * 8);
 
-
 #ifdef DEBUG_PERF_RUNTIME
 	auto start = std::chrono::high_resolution_clock::now();
 #endif
 
 	unsigned n;
 	// get keypoints in original image resolution coordinate space
-	if (FLAG_enablePeopleTracking)
-		n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(),
-			jointAngles.data(), &output_tracking_bbox, 0);
-	else
-		n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(),
-			jointAngles.data(), &output_bbox, 0);
+	n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(), jointAngles.data(), &output_tracking_bbox, 0);
 
 #ifdef DEBUG_PERF_RUNTIME
 	auto end = std::chrono::high_resolution_clock::now();
@@ -1060,62 +793,70 @@ DoApp::Err DoApp::acquireBodyBoxAndKeyPoints() {
 		printf("]\n");
 	}
 	if (FLAG_captureOutputs) {
-		if (FLAG_enablePeopleTracking) {
-			writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
-			writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
-		}
-		else {
-			writeFrameAndEstResults(frame, body_ar_engine.output_bboxes, keypoints2D.data());
-			writeVideoAndEstResults(frame, body_ar_engine.output_bboxes, keypoints2D.data());
-		}
+		writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
+		writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
 	}
 	if (0 == n) return errNoBody;
 
-	if (drawVisualization) {
-		if (FLAG_enablePeopleTracking)
-			DrawKeyPointsAndEdges(frame, keypoints2D.data(), numKeyPoints, &output_tracking_bbox);
-		else
-			DrawKeyPointsAndEdges(frame, keypoints2D.data(), numKeyPoints, &output_bbox);
+	if (FLAG_drawVisualization)
+		DrawKeyPointsAndEdges(frame, keypoints2D.data(), numKeyPoints, &output_tracking_bbox);
 
-		if (FLAG_offlineMode) {
-			if (FLAG_enablePeopleTracking) 
-				DrawBBoxes(frame, &output_tracking_bbox);
-			else
-				DrawBBoxes(frame, &output_bbox);
-		}
-	}
 	frameIndex++;
 
 	return err;
 }
 
-/********************************************************************************
- * CUDA GPU
- ********************************************************************************/
+BodyTrack::Err BodyTrack::acquireSharedMemFrame()
+{
+	// Before you read or write to the memory, you need to lock it.
+	// If it's able to lock the memory then you can get the pointer to the memory and use it.		
+	if (shm == NULL) {
+		printf("ERROR shared memory is null when trying to acquire frame\n");
+		return errSharedMem;
+	}
+	if (!shm->tryLock(1000))
+	{
+		printf("Failed to get a lock on shared memory!\n");
+		return errNone;		// keep moving forward, try again next loop
+	}
+	else
+	{
+		topHeader = (TOP_SharedMemHeader*)shm->getMemory();
+		if (topHeader == NULL || shm->getErrorState() != UT_SHM_ERR_NONE)
+		{
+			// idk if we still need to do this null check but doing it just in case for clarity
+			printf("No shared memory when trying to acquire frame\n");
+			shm->unlock();
+			return errSharedMem;
+		}
+		else // if (topHeader && (topHeader != NULL)) 
+		{
+			tempFrame.data = (unsigned char*)topHeader->getImage();
+			shm->unlock();
 
-int chooseGPU() {
-	// If the system has multiple supported GPUs then the application
-	// should use CUDA driver APIs or CUDA runtime APIs to enumerate
-	// the GPUs and select one based on the application's requirements
+			if (tempFrame.empty()) {
+				// could not read frame from shared memory
+				printf("Frame is empty and does not contain SharedMem image data\n");
+				return errSharedMemVideo;
+			}
 
-	//Cuda device 0
-	return 0;
+			frame = tempFrame;
+			return errNone;
+		}
+	}
 }
 
 /********************************************************************************
- * init
+ * init processes
  ********************************************************************************/
 
-DoApp::Err DoApp::initBodyEngine(const char* modelPath) {
+BodyTrack::Err BodyTrack::initBodyEngine(const char* modelPath) {
 	if (!cap.isOpened()) 
 		return errVideo;
 
 	int numKeyPoints = body_ar_engine.getNumKeyPoints();
 
-	if (FLAG_enablePeopleTracking) 
-		nvErr = body_ar_engine.createFeatures(modelPath, peopleTrackingBatchSize);
-	else
-		nvErr = body_ar_engine.createFeatures(modelPath, 1);
+	nvErr = body_ar_engine.createFeatures(modelPath, PEOPLE_TRACKING_BATCH_SIZE);
 
 #ifdef DEBUG
 	detector->setOutputLocation(outputDir);
@@ -1129,8 +870,57 @@ DoApp::Err DoApp::initBodyEngine(const char* modelPath) {
 	return doAppErr(nvErr);
 }
 
-DoApp::Err DoApp::initCamera(const char* camRes) {
-	if (cap.open(FLAG_camindex)) {
+BodyTrack::Err BodyTrack::initSharedMemory() {
+	// Convert string name to wchar_t
+	int strLen = (int)FLAG_sharedMemName.length() + 1;
+	int wideCharLen = MultiByteToWideChar(CP_ACP, 0, FLAG_sharedMemName.c_str(), strLen, 0, 0);
+	wchar_t* wideCharName = new wchar_t[wideCharLen];
+	MultiByteToWideChar(CP_ACP, 0, FLAG_sharedMemName.c_str(), strLen, wideCharName, wideCharLen);
+	std::wstring smName(wideCharName);
+	delete[] wideCharName;
+	printf("Shared Mem Name: %s\n\n", FLAG_sharedMemName.c_str());
+
+	// init touchdesigner shared memory w/ name from command line
+	shm = new UT_SharedMem(ShmString(smName));
+	// make sure we can get at shared memory
+	if (shm->getErrorState() != UT_SHM_ERR_NONE) {
+		printf("No shared memory in initialization\n");
+		return errSharedMem;
+	}
+	else printf("Created a UT_SharedMem successfully!\n");
+
+	// lock test
+	if (!shm->tryLock(5000)) {
+		printf("Lock test FAILED to get a lock on shared memory!\n");
+		printf("Try closing and reopening TouchDesigner to restart shared mem\n");
+		return errSharedMem;
+	}
+	else {
+		printf("Lock test succeded!\n");
+		topHeader = (TOP_SharedMemHeader*)shm->getMemory();
+
+		width = topHeader->width;
+		height = topHeader->height;
+
+		float quarterWidth = width / 4.0;
+		limitUser1 = quarterWidth;
+		limitUser2 = quarterWidth * 2;
+		limitUser3 = quarterWidth * 3;
+		limitUser4 = width;	// quarterWidth * 4
+
+		printf("Shared memory (w,h) = (%d,%d)\n\n", width, height);
+		shm->unlock();
+
+		tempFrame = cv::Mat(height, width, CV_8UC4);			// for converting image data from shared mem to frame
+		body_ar_engine.setInputImageWidth(width);
+		body_ar_engine.setInputImageHeight(height);
+
+		return errNone;
+	}
+}
+
+BodyTrack::Err BodyTrack::initCamera(const char* camRes) {
+	if (cap.open(FLAG_camIndex)) {
 		if (camRes) {
 			int n;
 			n = sscanf(camRes, "%d%*[xX]%d", &inputWidth, &inputHeight);
@@ -1160,7 +950,7 @@ DoApp::Err DoApp::initCamera(const char* camRes) {
 	return errNone;
 }
 
-DoApp::Err DoApp::initOfflineMode(const char* inputFilename, const char* outputFilename) {
+BodyTrack::Err BodyTrack::initOfflineMode(const char* inputFilename, const char* outputFilename) {
 	if (cap.open(inputFilename)) {
 		inputWidth = (int)cap.get(CV_CAP_PROP_FRAME_WIDTH);
 		inputHeight = (int)cap.get(CV_CAP_PROP_FRAME_HEIGHT);
@@ -1202,123 +992,20 @@ DoApp::Err DoApp::initOfflineMode(const char* inputFilename, const char* outputF
  * main, run, stop
  ********************************************************************************/
 
-void DoApp::processKey(int key) {
-	switch (key) {
-	case '2':
-		body_ar_engine.destroyFeatures();
-		body_ar_engine.setAppMode(BodyEngine::mode::keyPointDetection);
-		if (FLAG_enablePeopleTracking) 
-			body_ar_engine.createFeatures(FLAG_modelPath.c_str());
-		else
-			body_ar_engine.createFeatures(FLAG_modelPath.c_str(), 1);
-		body_ar_engine.initFeatureIOParams();
-		break;
-	case '1':
-		body_ar_engine.destroyFeatures();
-		body_ar_engine.setAppMode(BodyEngine::mode::bodyDetection);
-		body_ar_engine.createFeatures(FLAG_modelPath.c_str(), 1);
-		body_ar_engine.initFeatureIOParams();
-		break;
-	case 'C':
-	case 'c':
-		captureVideo = !captureVideo;
-		break;
-	case 'S':
-	case 's':
-		captureFrame = !captureFrame;
-		break;
-	case 'W':
-	case 'w':
-		drawVisualization = !drawVisualization;
-		break;
-	case 'F':
-	case 'f':
-		showFPS = !showFPS;
-		break;
-	default:
-		break;
-	}
-}
-
-void DoApp::stop() {
-	body_ar_engine.destroyFeatures();
-
-	if (FLAG_offlineMode) {
-		bodyDetectOutputVideo.release();
-		keyPointsOutputVideo.release();
-	}
-	cap.release();
-	cv::destroyAllWindows();
-}
-
-DoApp::Err DoApp::run() {
-	DoApp::Err doErr = errNone;
-
-	BodyEngine::Err err = body_ar_engine.initFeatureIOParams();
-	if (err != BodyEngine::Err::errNone) {
-		return doAppErr(err);
-	}
-	while (1) {
-		//printf(">> frame %d \n", framenum++);
-		doErr = acquireFrame();
-		if (frame.empty() && FLAG_offlineMode) {
-			// We have reached the end of the video
-			// so return without any error.
-			return DoApp::errNone;
-		}
-		else if (doErr != DoApp::errNone) {
-			return doErr;
-		}
-		if (body_ar_engine.appMode == BodyEngine::mode::bodyDetection) {
-			doErr = acquireBodyBox();
-		}
-		else if (body_ar_engine.appMode == BodyEngine::mode::keyPointDetection) {
-			doErr = acquireBodyBoxAndKeyPoints();
-		}
-		if ((DoApp::errNoBody == doErr || DoApp::errBodyFit == doErr) && FLAG_offlineMode) {
-			bodyDetectOutputVideo.write(frame);
-			keyPointsOutputVideo.write(frame);
-		}
-		if (DoApp::errCancel == doErr || DoApp::errVideo == doErr) return doErr;
-		if (!frame.empty() && !FLAG_offlineMode) {
-			if (drawVisualization) {
-				drawFPS(frame);
-				drawKalmanStatus(frame);
-				if (FLAG_captureOutputs && captureVideo) drawVideoCaptureStatus(frame);
-			}
-			cv::imshow(windowTitle, frame);
-		}
-		if (!FLAG_offlineMode) {
-			int n = cv::waitKey(1);
-			if (n >= 0) {
-				static const int ESC_KEY = 27;
-				if (n == ESC_KEY) break;
-				processKey(n);
-			}
-		}
-	}
-	return doErr;
-}
-
 int main(int argc, char** argv) {
 	// Parse the arguments
 	if (0 != ParseMyArgs(argc, argv)) return -100;
 
-	DoApp app;
-	DoApp::Err doErr = DoApp::Err::errNone;
+	BodyTrack app;
+	BodyTrack::Err doErr = BodyTrack::Err::errNone;
 
-	app.body_ar_engine.setAppMode(BodyEngine::mode(FLAG_appMode));
-
+	app.body_ar_engine.setAppMode(BodyEngine::mode(APP_MODE));
 	app.body_ar_engine.setMode(FLAG_mode);
-
-	if (FLAG_verbose) printf("Enable temporal optimizations in detecting body and keypoints = %d\n", FLAG_temporal);
-	app.body_ar_engine.setBodyStabilization(FLAG_temporal);
-
-	if (FLAG_useCudaGraph) printf("Enable capturing cuda graph = %d\n", FLAG_useCudaGraph);
+	app.body_ar_engine.setBodyStabilization(TEMPORAL_SMOOTHING);
 	app.body_ar_engine.useCudaGraph(FLAG_useCudaGraph);
-	app.body_ar_engine.enablePeopleTracking(FLAG_enablePeopleTracking, FLAG_shadowTrackingAge, FLAG_probationAge, FLAG_maxTargetsTracked);
+	app.body_ar_engine.enablePeopleTracking(ENABLE_MULTI_PEOPLE_TRACKING, FLAG_shadowTrackingAge, FLAG_probationAge, FLAG_maxTargetsTracked);
 
-	doErr = DoApp::errBodyModelInit;
+	doErr = BodyTrack::errBodyModelInit;
 	if (FLAG_modelPath.empty()) {
 		printf("WARNING: Model path not specified. Please set --model_path=/path/to/trt/and/body/models, "
 			"SDK will attempt to load the models from NVAR_MODEL_DIR environment variable, "
@@ -1329,7 +1016,7 @@ int main(int argc, char** argv) {
 
 	if (FLAG_offlineMode) {
 		if (FLAG_inFile.empty()) {
-			doErr = DoApp::errMissing;
+			doErr = BodyTrack::errMissing;
 			printf("ERROR: %s, please specify input file using --in_file or --in \n", app.errorStringFromCode(doErr));
 			goto bail;
 		}
@@ -1351,4 +1038,79 @@ bail:
 		printf("ERROR: %s\n", app.errorStringFromCode(doErr));
 	app.stop();
 	return (int)doErr;
+}
+
+BodyTrack::Err BodyTrack::run() {
+
+	BodyTrack::Err doErr = errNone;
+	BodyEngine::Err err = body_ar_engine.initFeatureIOParams();
+	if (err != BodyEngine::Err::errNone) 
+		return doAppErr(err);
+	
+	while (1) {
+		//printf(">> frame %d \n", framenum++);
+
+		doErr = acquireFrame();
+		
+		if (FLAG_offlineMode && frame.empty()) {
+			// We have reached the end of the video so return without any error
+			return BodyTrack::errNone;
+		}
+		else if (doErr != BodyTrack::errNone) {
+			return doErr;
+		}
+
+		doErr = acquireBodyBoxAndKeyPoints();
+
+		if (FLAG_offlineMode && (doErr == BodyTrack::errNoBody || doErr == BodyTrack::errBodyFit)) {
+			bodyDetectOutputVideo.write(frame);
+			keyPointsOutputVideo.write(frame);
+		}
+		
+		if (doErr == BodyTrack::errCancel || doErr == BodyTrack::errVideo) 
+			return doErr;
+				
+		if (!FLAG_offlineMode) {
+			if (!frame.empty()) {
+				if (FLAG_drawVisualization)
+					drawFPS(frame);
+				cv::imshow(windowTitle, frame);
+			}
+			int n = cv::waitKey(1);
+			if (n >= 0) {
+				static const int ESC_KEY = 27;
+				if (n == ESC_KEY) break;
+				/*
+				 switch (n) {
+				 case '1':
+						body_ar_engine.destroyFeatures();
+						body_ar_engine.setAppMode(BodyEngine::mode::bodyDetection);
+						body_ar_engine.createFeatures(FLAG_modelPath.c_str(), 1);
+						body_ar_engine.initFeatureIOParams();
+						break;
+				 case '2':
+						body_ar_engine.destroyFeatures();
+						body_ar_engine.setAppMode(BodyEngine::mode::keyPointDetection);
+						if (FLAG_enablePeopleTracking)
+							body_ar_engine.createFeatures(FLAG_modelPath.c_str());
+						else
+							body_ar_engine.createFeatures(FLAG_modelPath.c_str(), 1);
+						body_ar_engine.initFeatureIOParams();
+						break;
+				}
+				*/
+			}
+		}
+	}
+	return doErr;
+}
+
+void BodyTrack::stop() {
+	body_ar_engine.destroyFeatures();
+	if (FLAG_offlineMode) {
+		bodyDetectOutputVideo.release();
+		keyPointsOutputVideo.release();
+	}
+	cap.release();
+	cv::destroyAllWindows();
 }
