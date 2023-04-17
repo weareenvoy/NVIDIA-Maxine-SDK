@@ -34,7 +34,11 @@ public:
 		errSDK,
 		errCuda,
 		errCancel,
-		errCamera
+		errCamera,
+		errSharedMem, 
+		errSharedMemLock, 
+		errSharedMemSeg, 
+		errSharedMemVideo
 	};
 	BodyEngine::Err nvErr;
 	Err doAppErr(BodyEngine::Err status) { return (Err)status; }
@@ -71,7 +75,6 @@ public:
 	int frameIndex;
 	double frameTime;
 	Timer frameTimer;
-	int storedRedPixel = 0;
 	// std::chrono::high_resolution_clock::time_point frameTimer;
 	std::ofstream bodyEngineVideoOutputFile;
 	float expr[6];

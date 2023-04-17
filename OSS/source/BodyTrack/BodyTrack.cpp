@@ -169,10 +169,13 @@ const unsigned int APP_MODE = 1;
 const bool TEMPORAL_SMOOTHING = false;		
 
 // shared memory
-UT_SharedMem* shm;							// shared memory
-TOP_SharedMemHeader* topHeader;				// TOP_SharedMemHeader.h
-cv::Mat tempFrame;							// for converting touch shared mem to opencv mat
-int width, height;							// size of image from shared memory
+UT_SharedMem* shm;							// shared memory data
+TOP_SharedMemHeader* shmTopHeader;			// TOP_SharedMemHeader.h header data
+cv::Mat shmTempFrame;						// for converting touch shared mem to opencv mat
+int shmWidth, shmHeight;					// width and height of image from shared memory
+
+// for writing frame and video data to file on disk
+bool captureFrame = false, captureVideo = false;
 
 /********************************************************************************
  * command-line arguments
@@ -186,7 +189,6 @@ bool
 	FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file
 	FLAG_offlineMode = false,				// False: Webcam, True: Video file --> specifies whether to use offline video or an online camera video as the input
 	FLAG_useCudaGraph = true;				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
-bool captureFrame = false, captureVideo = false;
 
 std::string 
 	FLAG_outDir, 
@@ -821,8 +823,8 @@ BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 	}
 	else
 	{
-		topHeader = (TOP_SharedMemHeader*)shm->getMemory();
-		if (topHeader == NULL || shm->getErrorState() != UT_SHM_ERR_NONE)
+		shmTopHeader = (TOP_SharedMemHeader*)shm->getMemory();
+		if (shmTopHeader == NULL || shm->getErrorState() != UT_SHM_ERR_NONE)
 		{
 			// idk if we still need to do this null check but doing it just in case for clarity
 			printf("No shared memory when trying to acquire frame\n");
@@ -831,16 +833,16 @@ BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 		}
 		else // if (topHeader && (topHeader != NULL)) 
 		{
-			tempFrame.data = (unsigned char*)topHeader->getImage();
+			shmTempFrame.data = (unsigned char*)shmTopHeader->getImage();
 			shm->unlock();
 
-			if (tempFrame.empty()) {
+			if (shmTempFrame.empty()) {
 				// could not read frame from shared memory
 				printf("Frame is empty and does not contain SharedMem image data\n");
 				return errSharedMemVideo;
 			}
 
-			frame = tempFrame;
+			frame = shmTempFrame;
 			return errNone;
 		}
 	}
@@ -897,23 +899,17 @@ BodyTrack::Err BodyTrack::initSharedMemory() {
 	}
 	else {
 		printf("Lock test succeded!\n");
-		topHeader = (TOP_SharedMemHeader*)shm->getMemory();
+		shmTopHeader = (TOP_SharedMemHeader*)shm->getMemory();
 
-		width = topHeader->width;
-		height = topHeader->height;
+		shmWidth = shmTopHeader->width;
+		shmHeight = shmTopHeader->height;
 
-		float quarterWidth = width / 4.0;
-		limitUser1 = quarterWidth;
-		limitUser2 = quarterWidth * 2;
-		limitUser3 = quarterWidth * 3;
-		limitUser4 = width;	// quarterWidth * 4
-
-		printf("Shared memory (w,h) = (%d,%d)\n\n", width, height);
+		printf("Shared memory (w,h) = (%d,%d)\n\n", shmWidth, shmHeight);
 		shm->unlock();
 
-		tempFrame = cv::Mat(height, width, CV_8UC4);			// for converting image data from shared mem to frame
-		body_ar_engine.setInputImageWidth(width);
-		body_ar_engine.setInputImageHeight(height);
+		shmTempFrame = cv::Mat(shmHeight, shmWidth, CV_8UC4);			// for converting image data from shared mem to frame
+		body_ar_engine.setInputImageWidth(shmWidth);
+		body_ar_engine.setInputImageHeight(shmHeight);
 
 		return errNone;
 	}
