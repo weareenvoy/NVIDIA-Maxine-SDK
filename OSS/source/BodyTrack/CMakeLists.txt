@@ -2,9 +2,12 @@ set(SOURCE_FILES
 	BodyEngine.cpp 
 	BodyTrack.cpp 
 	../utils/RenderingUtils.cpp 
+	Timer.cpp
 )
 set(HEADER_FILES 
 	BodyEngine.h
+	DoApp.h
+	Timer.h
 )
 
 if(MSVC)
