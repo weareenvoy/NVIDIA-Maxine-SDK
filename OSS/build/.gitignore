@@ -4,6 +4,5 @@
 *.sln
 /.vs
 /CMakeFiles
-/Release
 /source
 /x64
