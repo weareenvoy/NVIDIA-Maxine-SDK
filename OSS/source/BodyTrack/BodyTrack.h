@@ -52,7 +52,7 @@ public:
 	Err initOfflineMode(const char* inputFilename = nullptr, const char* outputFilename = nullptr);
 	Err initSharedMemory();
 
-	Err acquireFrame();
+	Err acquireWebcamOrVideoFrame();
 	Err acquireSharedMemFrame();
 	Err acquireBodyBoxAndKeyPoints();
 
@@ -71,17 +71,15 @@ public:
 	cv::Mat frame;
 	cv::VideoCapture cap{};
 	cv::VideoWriter capturedVideo;
-	cv::VideoWriter bodyDetectOutputVideo{}, keyPointsOutputVideo{};
+	cv::VideoWriter keyPointsOutputVideo{};
+	std::ofstream bodyEngineVideoOutputFile;
 	int inputWidth, inputHeight;
+
 	int frameIndex;
 	double frameTime;
 	Timer frameTimer;
-	// std::chrono::high_resolution_clock::time_point frameTimer;
-	std::ofstream bodyEngineVideoOutputFile;
+
 	float expr[6];
 	float scaleOffsetXY[4];
 	std::vector<cv::Scalar> colorCodes = { cv::Scalar(255,255,255) };
-
-	// Batch Size has to be 8 when people tracking is enabled
-	const unsigned int PEOPLE_TRACKING_BATCH_SIZE = 8; 
 };

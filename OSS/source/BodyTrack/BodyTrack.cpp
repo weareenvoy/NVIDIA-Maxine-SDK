@@ -81,9 +81,6 @@
     goto bail;          \
   } while (0)
 
-#define DEBUG_RUNTIME
-#define PEOPLE_TRACKING_BATCH_SIZE 8
-
 const int PELVIS = 0;
 const int LEFT_HIP = 1;
 const int RIGHT_HIP = 2;
@@ -120,6 +117,9 @@ const int LEFT_THUMB_TIP = 32;
 const int RIGHT_THUMB_TIP = 33;
 
 const int NUM_KEYPOINTS = 34;
+
+// Batch Size has to be 8 when people tracking is enabled
+const unsigned int PEOPLE_TRACKING_BATCH_SIZE = 8;
 
 enum {
 	myErrNone = 0,
@@ -377,30 +377,33 @@ const char* BodyTrack::errorStringFromCode(BodyTrack::Err code) {
 		const char* str;
 	};
 	static const LUTEntry lut[] = {
-		{errNone, "no error"},
-		{errGeneral, "an error has occured"},
-		{errRun, "an error has occured while the feature is running"},
-		{errInitialization, "Initializing Body Engine failed"},
-		{errRead, "an error has occured while reading a file"},
-		{errEffect, "an error has occured while creating a feature"},
-		{errParameter, "an error has occured while setting a parameter for a feature"},
-		{errUnimplemented, "the feature is unimplemented"},
-		{errMissing, "missing input parameter"},
-		{errVideo, "no video source has been found"},
-		{errImageSize, "the image size cannot be accommodated"},
-		{errNotFound, "the item cannot be found"},
-		{errBodyModelInit, "body model initialization failed"},
-		{errGLFWInit, "GLFW initialization failed"},
-		{errGLInit, "OpenGL initialization failed"},
-		{errRendererInit, "renderer initialization failed"},
-		{errGLResource, "an OpenGL resource could not be found"},
-		{errGLGeneric, "an otherwise unspecified OpenGL error has occurred"},
-		{errBodyFit, "an error has occurred while body fitting"},
-		{errNoBody, "no body has been found"},
-		{errSDK, "an SDK error has occurred"},
-		{errCuda, "a CUDA error has occurred"},
-		{errCancel, "the user cancelled"},
-		{errCamera, "unable to connect to the camera"},
+		{errNone, "no error (errNone)"},
+		{errGeneral, "an error has occured (errGeneral)"},
+		{errRun, "an error has occured while the feature is running (errRun)"},
+		{errInitialization, "Initializing Body Engine failed (errInitialization)"},
+		{errRead, "an error has occured while reading a file (errRead)"},
+		{errEffect, "an error has occured while creating a feature (errEffect)"},
+		{errParameter, "an error has occured while setting a parameter for a feature (errParameter)"},
+		{errUnimplemented, "the feature is unimplemented (errUnimplemented)"},
+		{errMissing, "missing input parameter (errMissing)"},
+		{errVideo, "no video source has been found (errVideo)"},
+		{errImageSize, "the image size cannot be accommodated (errImageSize)"},
+		{errNotFound, "the item cannot be found (errNotFound)"},
+		{errBodyModelInit, "body model initialization failed (errBodyModelInit)"},
+		{errGLFWInit, "GLFW initialization failed (errGLFWInit)"},
+		{errGLInit, "OpenGL initialization failed (errGLInit)"},
+		{errRendererInit, "renderer initialization failed (errRendererInit)"},
+		{errGLResource, "an OpenGL resource could not be found (errGLResource)"},
+		{errGLGeneric, "an otherwise unspecified OpenGL error has occurred (errGLGeneric)"},
+		{errBodyFit, "an error has occurred while body fitting (errBodyFit)"},
+		{errNoBody, "no body has been found (errNoBody)"},
+		{errSDK, "an SDK error has occurred (errSDK)"},
+		{errCuda, "a CUDA error has occurred (errCuda)"},
+		{errCancel, "the user cancelled (errCancel)"},
+		{errCamera, "unable to connect to the camera (errCamera)"},
+		{errSharedMemLock, "could not lock shared memory (errSharedMemLock)"},
+		{errSharedMemSeg, "invalid shared memory segment (errSharedMemSeg)"},
+		{errSharedMemVideo, "could not read frame from shared memory (errSharedMemVideo)"}
 	};
 	for (const LUTEntry* p = lut; p < &lut[sizeof(lut) / sizeof(lut[0])]; ++p)
 		if (p->code == code) return p->str;
@@ -752,7 +755,7 @@ void BodyTrack::drawFPS(cv::Mat& img) {
  * acquire joints keypoints and bounding boxes
  ********************************************************************************/
 
-BodyTrack::Err BodyTrack::acquireFrame() {
+BodyTrack::Err BodyTrack::acquireWebcamOrVideoFrame() {
 	Err err = errNone;
 
 	// If the machine goes to sleep with the app running and then wakes up, the camera object is not destroyed but the
@@ -775,6 +778,11 @@ BodyTrack::Err BodyTrack::acquireFrame() {
 
 BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 {
+	/*
+	*  !! IMPORTANT !!
+	* Your video input must be flipped along the X before getting to the Shared Mem Out TOP
+	*/
+
 	// Before you read or write to the memory, you need to lock it.
 	// If it's able to lock the memory then you can get the pointer to the memory and use it.		
 	if (shm == NULL) {
@@ -1122,7 +1130,7 @@ BodyTrack::Err BodyTrack::run() {
 		// get frame based on desired video source
 		// "frame" is a global variable shared among functions
 		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile) {
-			doErr = acquireFrame();
+			doErr = acquireWebcamOrVideoFrame();
 		}
 		else if (FLAG_videoSource == sharedMemory) {
 			doErr = acquireSharedMemFrame();
@@ -1138,23 +1146,21 @@ BodyTrack::Err BodyTrack::run() {
 
 		// get joint keypoint data and bounding box data
 		doErr = acquireBodyBoxAndKeyPoints();
-
-		if (offlineMode && (doErr == BodyTrack::errNoBody || doErr == BodyTrack::errBodyFit)) {
-			// write frame to output file
-			bodyDetectOutputVideo.write(frame);
-			keyPointsOutputVideo.write(frame);
-		}
-
 		if (doErr == BodyTrack::errCancel || doErr == BodyTrack::errVideo)
 			return doErr;
 
-		if (!offlineMode) {
-			if (!frame.empty()) {
+		// write frame to output file or to window
+		if (offlineMode) {
+			if (doErr == BodyTrack::errNoBody || doErr == BodyTrack::errBodyFit)
+				keyPointsOutputVideo.write(frame);
+		}
+		else { // if (!offlineMode) {
+			if (!frame.empty() && FLAG_drawWindow) {
 				if (FLAG_drawFPS)
 					drawFPS(frame);
-				if (FLAG_drawWindow)
-					cv::imshow(windowTitle, frame);
+				cv::imshow(windowTitle, frame);
 			}
+
 			int n = cv::waitKey(1);
 			if (n >= 0) {
 				static const int ESC_KEY = 27;
@@ -1187,10 +1193,12 @@ BodyTrack::Err BodyTrack::run() {
 
 void BodyTrack::stop() {
 	body_ar_engine.destroyFeatures();
-	if (offlineMode) {
-		bodyDetectOutputVideo.release();
+
+	if (offlineMode)
 		keyPointsOutputVideo.release();
-	}
-	cap.release();
-	cv::destroyAllWindows();
+	else
+		cv::destroyAllWindows();
+
+	if (!FLAG_videoSource == sharedMemory)
+		cap.release();
 }
