@@ -143,6 +143,18 @@ enum {
 	sharedMemory = 2
 };
 
+// mode
+enum {
+	highQuality = 0,
+	highPerformance = 1
+};
+
+// app mode
+enum {
+	bodyDetection = 0,			// bounding box only
+	bodyPoseDetection = 1		// bounding box and keypoints
+};
+
 // style guide for drawing bounding box, skeleton joints, and text
 const auto CIRCLE_COLOR = cv::Scalar(180, 180, 180);		// grey
 const int CIRCLE_RADIUS = 4;
@@ -162,51 +174,56 @@ const float TIME_CONSTANT = 16.f;
 const float FRAMETIME_THRESHOLD = 100.f;
 
 // Made the executive decision that we only want to track multiple people and not limit outselves to only one user at a time
-const bool ENABLE_MULTI_PEOPLE_TRACKING = true;		
+const bool ENABLE_MULTI_PEOPLE_TRACKING = true;
 // Made the executive decision that we default to keypoint detection, which includes body detection
-const unsigned int APP_MODE = 1;			
+const unsigned int APP_MODE = bodyPoseDetection;
 // Optimizes the results for temporal input frames. Not possible for multi-person tracking, so must be false.
-const bool TEMPORAL_SMOOTHING = false;		
+const bool TEMPORAL_SMOOTHING = false;
 
 // shared memory
-UT_SharedMem* shm;							// shared memory data
-TOP_SharedMemHeader* shmTopHeader;			// TOP_SharedMemHeader.h header data
-cv::Mat shmTempFrame;						// for converting touch shared mem to opencv mat
-int shmWidth, shmHeight;					// width and height of image from shared memory
+UT_SharedMem* shm;						// shared memory data
+TOP_SharedMemHeader* shmTopHeader;		// TOP_SharedMemHeader.h header data
+cv::Mat shmTempFrame;					// for converting touch shared mem to opencv mat
+int shmWidth, shmHeight;				// width and height of image from shared memory
 
 // for writing frame and video data to file on disk
 bool captureFrame = false, captureVideo = false;
+// specifies whether to use offline video or an online camera video as the input. 
+// when offline mode is true --> Disables webcam, reads video from file, and writes output video results to file
+bool offlineMode = false;				// False: Webcam or SharedMem, True: Video file
+
+// designates model selection within modelPath folder based on mode and appMode
+std::string bodyModel;					// set automatically based on PC hardware
 
 /********************************************************************************
  * command-line arguments
  ********************************************************************************/
 
 bool
-	FLAG_showFPS = true,					// Write FPS debug information to window
-	FLAG_drawVisualization = true,			// Draw keypoint and bounding box data to window
-	FLAG_debug = false,						// Print debugging information to the console
-	FLAG_verbose = false,					// Print extra information to the console
-	FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file
-	FLAG_offlineMode = false,				// False: Webcam, True: Video file --> specifies whether to use offline video or an online camera video as the input
-	FLAG_useCudaGraph = true;				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
+FLAG_drawTracking = true,				// Draw keypoint and bounding box data to window
+FLAG_drawWindow = true,					// Draw window with video feed to desktop
+FLAG_drawFPS = true,					// Write FPS debug information to window
+FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file. If input is video file, gets set to true
+FLAG_debug = false,						// Print debugging information to the console
+FLAG_verbose = false,					// Print extra information to the console
+FLAG_useCudaGraph = true;				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
 
-std::string 
-	FLAG_outDir, 
-	FLAG_inFile, 
-	FLAG_outFile, 
-	FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",
-	FLAG_captureCodec = "avc1", 
-	FLAG_camRes, 
-	FLAG_bodyModel,
-	FLAG_sharedMemName = "TOPshm";
+std::string
+FLAG_inFilePath,						// input file path on disk for video source (path + name + prefix)
+FLAG_outFilePrefix,						// output file prefix for writing data to disk (path + name but should not include file time, like .mp4)
+FLAG_camRes,							// If offlineMode=false, specifies the cam res. If width omitted, width is computed from height to give an aspect ratio of 4:3.
+FLAG_captureCodec = "avc1",				// avc1 = h264
+FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",	// default installation location
+FLAG_sharedMemName = "TOPshm";
 
 unsigned int
-	FLAG_chosenGPU = 0,						// Index of GPU to run the Maxine executable
-	FLAG_mode = 1,							// 0: High Quality, 1: High Performance -> default to high performance
-	FLAG_camIndex = 0,						// Index of webcam connected to the PC
-	FLAG_shadowTrackingAge = 90,			// Sets the Shadow Tracking Age for Multi-Person Tracking, the default value is 90 (frames).
-	FLAG_probationAge = 10,					// Sets the Probation Age for Multi-Person tracking, the default value is 10 (frames).
-	FLAG_maxTargetsTracked = 30;			// Sets the Maxinum Targets Tracked. The default value is 30, and the minimum is value is 1.
+FLAG_videoSource = webcam,				// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
+FLAG_mode = highPerformance,			// 0: High Quality, 1: High Performance -> default to high performance
+FLAG_chosenGPU = 0,						// Index of GPU to run the Maxine executable
+FLAG_camIndex = 0,						// Index of webcam connected to the PC
+FLAG_shadowTrackingAge = 90,			// Sets the Shadow Tracking Age, after which tracking information for a person is removed. The default value is 90 (frames).
+FLAG_probationAge = 10,					// Sets the Probation Age, after which tracking information for a person is addedd. The default value is 10 (frames).
+FLAG_maxTargetsTracked = 30;			// Sets the Maxinum Targets Tracked. The default value is 30, and the minimum is value is 1.
 
 /********************************************************************************
  * parsing command line args
@@ -215,76 +232,28 @@ unsigned int
 static void Usage() {
 	printf(
 		"BodyTrack [<args> ...]\n"
-		"where <args> is\n"
-		" --debug[=(true|false)]				Report debugging info\n"
-		" --verbose[=(true|false)]				Report interesting info\n"
-		" --use_cuda_graph[=(true|false)]		Enable faster execution by using cuda graph to capture engine execution\n"
-		" --capture_outputs[=(true|false)]		Enables video/image capture and writing body detection/keypoints outputs to file\n"
-		" --offline_mode[=(true|false)]			Disables webcam, reads video from file, and writes output video results to file\n"
-		" --cam_res=[WWWx]HHH					Specify resolution as height or width x height\n"
-		" --cam_index[=0,1,2,3,...]				Specify the webcam index we want to use for the video feed\n"
-		" --in_file=<file>						Specify the input file\n"
-		" --codec=<fourcc>						FOURCC code for the desired codec (default H264)\n"
-		" --in=<file>							Specify the input file\n"
-		" --out_file=<file>						Specify the output file\n"
-		" --out=<file>							Specify the output file\n"
-		" --model_path=<path>					Specify the directory containing the TRT models\n"
-		" --mode[=0|1]							Model Mode. 0: High Quality, 1: High Performance\n"
-		" --enable_people_tracking[=(0|1)]		Enables people tracking\n "
-		" --shadow_tracking_age					Shadow Tracking Age after which tracking information of a person is removed. Measured in frames\n"
-		" --probation_age						Length of probationary period. Measured in frames\n"
-		" --max_targets_tracked					Maximum number of targets to be tracked\n"
-		" --benchmarks[=<pattern>]				Run benchmarks\n");
-}
-
-static int ParseMyArgs(int argc, char** argv) {
-	int errs = 0;
-	for (--argc, ++argv; argc--; ++argv) {
-		bool help;
-		const char* arg = *argv;
-		if (arg[0] != '-') {
-			continue;
-		}
-		else if ((arg[1] == '-') && (
-			GetFlagArgVal("verbose", arg, &FLAG_verbose) || 
-			GetFlagArgVal("debug", arg, &FLAG_debug) ||
-			GetFlagArgVal("in", arg, &FLAG_inFile) || 
-			GetFlagArgVal("in_file", arg, &FLAG_inFile) ||
-			GetFlagArgVal("out", arg, &FLAG_outFile) || 
-			GetFlagArgVal("out_file", arg, &FLAG_outFile) ||
-			GetFlagArgVal("offline_mode", arg, &FLAG_offlineMode) ||
-			GetFlagArgVal("capture_outputs", arg, &FLAG_captureOutputs) ||
-			GetFlagArgVal("cam_res", arg, &FLAG_camRes) || 
-			GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
-			GetFlagArgVal("cam_index", arg, &FLAG_camIndex) ||
-			GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
-			GetFlagArgVal("mode", arg, &FLAG_mode) ||
-			GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph) ||
-			GetFlagArgVal("shadow_tracking_age", arg, &FLAG_shadowTrackingAge) ||
-			GetFlagArgVal("probation_age", arg, &FLAG_probationAge) ||
-			GetFlagArgVal("max_targets_tracked", arg, &FLAG_maxTargetsTracked) 
-		)) {
-			continue;
-		}
-		else if (GetFlagArgVal("help", arg, &help)) {
-			Usage();
-		}
-		else if (arg[1] != '-') {
-			for (++arg; *arg; ++arg) {
-				if (*arg == 'v') {
-					FLAG_verbose = true;
-				}
-				else {
-					// printf("Unknown flag: \"-%c\"\n", *arg);
-				}
-			}
-			continue;
-		}
-		else {
-			// printf("Unknown flag: \"%s\"\n", arg);
-		}
-	}
-	return errs;
+		"where <args> is:\n"
+		" --mode[=0|1]							Model Mode. 0: High Quality, 1: High Performance. Default is 1.\n"
+		" --draw_tracking[=(true|false)]		Draw tracking information (joints, bbox) on top of frame. Default is true.\n"
+		" --draw_window[=(true|false)]			Draw video feed to window on desktop. Default is true.\n"
+		" --draw_fps[=(true|false)]				Draw FPS debug information on top of frame. Default is true.\n"
+		" --use_cuda_graph[=(true|false)]		Enable faster execution by using cuda graph to capture engine execution. Default is true.\n"
+		" --chosen_gpu[=(0|1|2|3|..)]			GPU index for running the Maxine instance. Default is 0.\n"
+		" --video_source[=(0|1|2)]				Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TD). Default is 0.\n"
+		" --cam_index[=(0|1|2|3|..)]			Specify the webcam index we want to use for the video feed. Default is 0.\n"
+		" --shared_mem_name=<string>			Specify the string name for Shared Memory from TouchDesigner. Default is 'TOPshm'.\n"
+		" --capture_outputs[=(true|false)]		Enables video/image capture and writing data to file. Default is false.\n"
+		" --cam_res=[WWWx]HHH					Specify webcam resolution as height or width x height (--cam_res=640x480 or --cam_res=480). Default is empty string.\n"
+		" --in_file_path=<file>					Specify the input file. Default is empty string.\n"
+		" --out_file_prefix=<file>				Specify the output file name (no extension like .mp4). Default is empty string.\n"
+		" --codec=<fourcc>						FOURCC code for the desired codec. Default is H264 (avc1).\n"
+		" --model_path=<path>					Specify the directory containing the TRT models.\n"
+		" --shadow_tracking_age=<int>			Shadow Tracking Age (frames), after which tracking info of a person is removed. Default is 90.\n"
+		" --probation_age=<int>					Length of probationary period (frames), after which tracking info of a person is added. Default is 10.\n"
+		" --max_targets_tracked=<int>			Maximum number of targets to be tracked. Default is 30, min value is 1.\n"
+		" --debug[=(true|false)]				Report debugging timing info to console. Default is false.\n"
+		" --verbose[=(true|false)]				Report keypoint joint info to console. Default is false.\n"
+	);
 }
 
 static bool GetFlagArgVal(const char* flag, const char* arg, const char** val) {
@@ -343,6 +312,59 @@ static bool GetFlagArgVal(const char* flag, const char* arg, unsigned* val) {
 		*val = (unsigned)longVal;
 	}
 	return success;
+}
+
+static int ParseMyArgs(int argc, char** argv) {
+	int errs = 0;
+	for (--argc, ++argv; argc--; ++argv) {
+		bool help;
+		const char* arg = *argv;
+		if (arg[0] != '-') {
+			continue;
+		}
+		else if ((arg[1] == '-') && (
+			GetFlagArgVal("mode", arg, &FLAG_mode) ||
+			GetFlagArgVal("draw_tracking", arg, &FLAG_drawTracking) ||
+			GetFlagArgVal("draw_window", arg, &FLAG_drawWindow) ||
+			GetFlagArgVal("draw_fps", arg, &FLAG_drawFPS) ||
+			GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph) ||
+			GetFlagArgVal("chosen_gpu", arg, &FLAG_chosenGPU) ||
+			GetFlagArgVal("video_source", arg, &FLAG_videoSource) ||
+			GetFlagArgVal("cam_index", arg, &FLAG_camIndex) ||
+			GetFlagArgVal("shared_mem_name", arg, &FLAG_sharedMemName) ||
+			GetFlagArgVal("capture_outputs", arg, &FLAG_captureOutputs) ||
+			GetFlagArgVal("cam_res", arg, &FLAG_camRes) ||
+			GetFlagArgVal("in_file_path", arg, &FLAG_inFilePath) ||
+			GetFlagArgVal("out_file_prefix", arg, &FLAG_outFilePrefix) ||
+			GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
+			GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
+			GetFlagArgVal("shadow_tracking_age", arg, &FLAG_shadowTrackingAge) ||
+			GetFlagArgVal("probation_age", arg, &FLAG_probationAge) ||
+			GetFlagArgVal("max_targets_tracked", arg, &FLAG_maxTargetsTracked) ||
+			GetFlagArgVal("debug", arg, &FLAG_debug) ||
+			GetFlagArgVal("verbose", arg, &FLAG_verbose)
+			)) {
+			continue;
+		}
+		else if (GetFlagArgVal("help", arg, &help)) {
+			Usage();
+		}
+		else if (arg[1] != '-') {
+			for (++arg; *arg; ++arg) {
+				if (*arg == 'v') {
+					FLAG_verbose = true;
+				}
+				else {
+					// printf("Unknown flag: \"-%c\"\n", *arg);
+				}
+			}
+			continue;
+		}
+		else {
+			// printf("Unknown flag: \"%s\"\n", arg);
+		}
+	}
+	return errs;
 }
 
 /********************************************************************************
@@ -476,7 +498,7 @@ void BodyTrack::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoint
 	int trackingID;
 
 	// get frame and user data
-	cv::Mat frm = (FLAG_offlineMode) ? src.clone() : src;
+	cv::Mat frm = (offlineMode) ? src.clone() : src;
 	int numTrackedUsers = body_ar_engine.output_tracking_bboxes.num_boxes;
 
 	// draw bounding box and id number for each tracked user 
@@ -518,7 +540,7 @@ void BodyTrack::DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoint
 	}
 
 	// write output video to file
-	if (FLAG_offlineMode) 
+	if (offlineMode)
 		keyPointsOutputVideo.write(frm);
 }
 
@@ -581,7 +603,7 @@ void BodyTrack::drawKeyPointLine(const cv::Mat& src, NvAR_Point2f* keypoints, in
 	// draw line
 	cv::line(src, point1, point2, cv_colors[color], RECT_THICKNESS);
 }
- 
+
 /********************************************************************************
  * write data to file
  ********************************************************************************/
@@ -640,15 +662,12 @@ void BodyTrack::writeVideoAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes 
 			getFPS();
 			if (frameTime) {
 				float fps = (float)(1.0 / frameTime);
-				capturedVideo.open(capturedOutputFileName, StringToFourcc(FLAG_captureCodec), fps,
-					cv::Size(frm.cols, frm.rows));
+				capturedVideo.open(capturedOutputFileName, StringToFourcc(FLAG_captureCodec), fps, cv::Size(frm.cols, frm.rows));
 				if (!capturedVideo.isOpened()) {
 					std::cout << "Error: Could not open video: \"" << capturedOutputFileName << "\"\n";
 					return;
 				}
-				if (FLAG_verbose) {
-					std::cout << "Capturing video started" << std::endl;
-				}
+				printf("Capturing video started...\n");
 			}
 			else {  // If frameTime is 0.f, returns without writing the frame to the Video
 				return;
@@ -661,8 +680,7 @@ void BodyTrack::writeVideoAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes 
 			}
 			std::string keyPointDetectionMode = (keypoints == NULL) ? "Off" : "On";
 			bodyEngineVideoOutputFile << "// BodyDetectOn, KeyPointDetect" << keyPointDetectionMode << "\n ";
-			bodyEngineVideoOutputFile
-				<< "// kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumLMs, [lm_x, lm_y]{kNumLMs}\n";
+			bodyEngineVideoOutputFile << "// kNumPeople, (bbox_x, bbox_y, bbox_w, bbox_h){ kNumPeople}, kNumLMs, [lm_x, lm_y]{kNumLMs}\n";
 		}
 		// Write each frame to the Video
 		capturedVideo << frm;
@@ -670,9 +688,7 @@ void BodyTrack::writeVideoAndEstResults(const cv::Mat& frm, NvAR_TrackingBBoxes 
 	}
 	else {
 		if (capturedVideo.isOpened()) {
-			if (FLAG_verbose) {
-				std::cout << "Capturing video ended" << std::endl;
-			}
+			printf("Capturing video ended!\n");
 			capturedVideo.release();
 			if (bodyEngineVideoOutputFile.is_open()) bodyEngineVideoOutputFile.close();
 		}
@@ -725,7 +741,7 @@ void BodyTrack::getFPS() {
 
 void BodyTrack::drawFPS(cv::Mat& img) {
 	getFPS();
-	if (frameTime && FLAG_showFPS) {
+	if (frameTime && FLAG_drawFPS) {
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%.1f", 1. / frameTime);
 		cv::putText(img, buf, cv::Point(img.cols - 80, img.rows - 10), FONT_FACE, DEBUG_TEXT_SCALE, DEBUG_TEXT_COLOR, DEBUG_FONT_THICKNESS);
@@ -746,7 +762,7 @@ BodyTrack::Err BodyTrack::acquireFrame() {
 	cap >> frame;  // get a new frame from camera into the class variable frame.
 	if (frame.empty()) {
 		// if in Offline mode, this means end of video,so we return
-		if (FLAG_offlineMode) return errVideo;
+		if (offlineMode) return errVideo;
 		// try Init one more time if reading frames from camera
 		err = initCamera(FLAG_camRes.c_str());
 		if (err != errNone)
@@ -754,57 +770,6 @@ BodyTrack::Err BodyTrack::acquireFrame() {
 		cap >> frame;
 		if (frame.empty()) return errVideo;
 	}
-
-	return err;
-}
-
-BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
-	Err err = errNone;
-	int numKeyPoints = body_ar_engine.getNumKeyPoints();
-	NvAR_BBoxes output_bbox;
-	NvAR_TrackingBBoxes output_tracking_bbox;
-	std::vector<NvAR_Point2f> keypoints2D(numKeyPoints * 8);
-	std::vector<NvAR_Point3f> keypoints3D(numKeyPoints * 8);
-	std::vector<NvAR_Quaternion> jointAngles(numKeyPoints * 8);
-
-#ifdef DEBUG_PERF_RUNTIME
-	auto start = std::chrono::high_resolution_clock::now();
-#endif
-
-	unsigned n;
-	// get keypoints in original image resolution coordinate space
-	n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(), jointAngles.data(), &output_tracking_bbox, 0);
-
-#ifdef DEBUG_PERF_RUNTIME
-	auto end = std::chrono::high_resolution_clock::now();
-	auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-	std::cout << "box+keypoints time: " << duration.count() << " microseconds" << std::endl;
-#endif
-
-	if (n && FLAG_verbose && body_ar_engine.appMode != BodyEngine::mode::bodyDetection) {
-		printf("KeyPoints: [\n");
-		for (const auto& pt : keypoints2D) {
-			printf("%7.1f%7.1f\n", pt.x, pt.y);
-		}
-		printf("]\n");
-
-		printf("3d KeyPoints: [\n");
-		for (const auto& pt : keypoints3D) {
-			printf("%7.1f%7.1f%7.1f\n", pt.x, pt.y, pt.z);
-		}
-		printf("]\n");
-	}
-	if (FLAG_captureOutputs) {
-		writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
-		writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
-	}
-	if (0 == n) return errNoBody;
-
-	if (FLAG_drawVisualization)
-		DrawKeyPointsAndEdges(frame, keypoints2D.data(), numKeyPoints, &output_tracking_bbox);
-
-	frameIndex++;
-
 	return err;
 }
 
@@ -827,7 +792,7 @@ BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 		if (shmTopHeader == NULL || shm->getErrorState() != UT_SHM_ERR_NONE)
 		{
 			// idk if we still need to do this null check but doing it just in case for clarity
-			printf("No shared memory when trying to acquire frame\n");
+			printf("ERROR: No shared memory when trying to acquire frame\n");
 			shm->unlock();
 			return errSharedMem;
 		}
@@ -838,7 +803,7 @@ BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 
 			if (shmTempFrame.empty()) {
 				// could not read frame from shared memory
-				printf("Frame is empty and does not contain SharedMem image data\n");
+				printf("ERROR: Frame is empty and does not contain SharedMem image data\n");
 				return errSharedMemVideo;
 			}
 
@@ -848,26 +813,84 @@ BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 	}
 }
 
+BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
+	Err err = errNone;
+	NvAR_BBoxes output_bbox;
+	NvAR_TrackingBBoxes output_tracking_bbox;
+	std::chrono::steady_clock::time_point start, end;
+
+	int numKeyPoints = body_ar_engine.getNumKeyPoints();
+	std::vector<NvAR_Point2f> keypoints2D(numKeyPoints * PEOPLE_TRACKING_BATCH_SIZE);
+	std::vector<NvAR_Point3f> keypoints3D(numKeyPoints * PEOPLE_TRACKING_BATCH_SIZE);
+	std::vector<NvAR_Quaternion> jointAngles(numKeyPoints * PEOPLE_TRACKING_BATCH_SIZE);
+
+	try {
+		if (FLAG_debug) {
+			start = std::chrono::high_resolution_clock::now();
+		}
+
+		unsigned n;
+		// get keypoints in original image resolution coordinate space
+		n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(), jointAngles.data(), &output_tracking_bbox, 0);
+
+		if (FLAG_debug) {
+			end = std::chrono::high_resolution_clock::now();
+			auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+			std::cout << "box+keypoints time: " << duration.count() << " microseconds" << std::endl;
+		}
+
+		if (n && FLAG_verbose) {
+			printf("2D KeyPoints: [\n");
+			for (const auto& pt : keypoints2D) {
+				printf("%7.1f%7.1f\n", pt.x, pt.y);
+			}
+			printf("]\n");
+
+			printf("3d KeyPoints: [\n");
+			for (const auto& pt : keypoints3D) {
+				printf("%7.1f%7.1f%7.1f\n", pt.x, pt.y, pt.z);
+			}
+			printf("]\n");
+		}
+		if (n == 0) {
+			return errNoBody;
+		}
+
+		if (FLAG_captureOutputs) {
+			writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
+			writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
+		}
+
+		if (FLAG_drawTracking) {
+			DrawKeyPointsAndEdges(frame, keypoints2D.data(), numKeyPoints, &output_tracking_bbox);
+		}
+
+		frameIndex++;
+
+		return err;
+	}
+	catch (...) {
+		printf("(BodyTrack) Could not complete body_ar_engine.acquireBodyBoxAndKeyPoints()\n");
+		return errNone;
+		//return errSharedMemSeg;
+	}
+}
+
 /********************************************************************************
  * init processes
  ********************************************************************************/
 
 BodyTrack::Err BodyTrack::initBodyEngine(const char* modelPath) {
-	if (!cap.isOpened()) 
+	// make sure video capture has been started for webcam and video file
+	if (!(FLAG_videoSource == sharedMemory) && !cap.isOpened())
 		return errVideo;
 
-	int numKeyPoints = body_ar_engine.getNumKeyPoints();
-
+	// start creating tracking features based on model and multi-track
 	nvErr = body_ar_engine.createFeatures(modelPath, PEOPLE_TRACKING_BATCH_SIZE);
 
-#ifdef DEBUG
-	detector->setOutputLocation(outputDir);
-#endif  // DEBUG
-
-	if (!FLAG_offlineMode) 
+	// create a window on the desktop for displaying video feed and tracking
+	if (!offlineMode && FLAG_drawWindow)
 		cv::namedWindow(windowTitle, 1);
-
-	frameIndex = 0;
 
 	return doAppErr(nvErr);
 }
@@ -948,6 +971,7 @@ BodyTrack::Err BodyTrack::initCamera(const char* camRes) {
 
 BodyTrack::Err BodyTrack::initOfflineMode(const char* inputFilename, const char* outputFilename) {
 	if (cap.open(inputFilename)) {
+		printf("Input Video File: %s\n", inputFilename);
 		inputWidth = (int)cap.get(CV_CAP_PROP_FRAME_WIDTH);
 		inputHeight = (int)cap.get(CV_CAP_PROP_FRAME_HEIGHT);
 		body_ar_engine.setInputImageWidth(inputWidth);
@@ -958,7 +982,7 @@ BodyTrack::Err BodyTrack::initOfflineMode(const char* inputFilename, const char*
 		return Err::errVideo;
 	}
 
-	std::string bdOutputVideoName, jdOutputVideoName;
+	std::string jdOutputVideoName;
 	std::string outputFilePrefix;
 	if (outputFilename && strlen(outputFilename) != 0) {
 		outputFilePrefix = outputFilename;
@@ -967,17 +991,13 @@ BodyTrack::Err BodyTrack::initOfflineMode(const char* inputFilename, const char*
 		size_t lastindex = std::string(inputFilename).find_last_of(".");
 		outputFilePrefix = std::string(inputFilename).substr(0, lastindex);
 	}
-	bdOutputVideoName = outputFilePrefix + "_bbox.mp4";
-	jdOutputVideoName = outputFilePrefix + "_pose.mp4";
 
-	if (!bodyDetectOutputVideo.open(bdOutputVideoName, StringToFourcc(FLAG_captureCodec), cap.get(CV_CAP_PROP_FPS),
-		cv::Size(inputWidth, inputHeight))) {
-		printf("ERROR: Unable to open the output video file \"%s\" \n", bdOutputVideoName.c_str());
-		return Err::errGeneral;
-	}
-	if (!keyPointsOutputVideo.open(jdOutputVideoName, StringToFourcc(FLAG_captureCodec), cap.get(CV_CAP_PROP_FPS),
-		cv::Size(inputWidth, inputHeight))) {
-		printf("ERROR: Unable to open the output video file \"%s\" \n", bdOutputVideoName.c_str());
+	jdOutputVideoName = outputFilePrefix + "_BodyTrack.mp4";
+	printf("Output Video: %s\n", jdOutputVideoName.c_str());
+
+	bool canOpenOutputVideo = keyPointsOutputVideo.open(jdOutputVideoName, StringToFourcc(FLAG_captureCodec), cap.get(CV_CAP_PROP_FPS), cv::Size(inputWidth, inputHeight));
+	if (!canOpenOutputVideo) {
+		printf("ERROR: Unable to open the output video file \"%s\" \n", jdOutputVideoName.c_str());
 		return Err::errGeneral;
 	}
 
@@ -988,6 +1008,41 @@ BodyTrack::Err BodyTrack::initOfflineMode(const char* inputFilename, const char*
  * main, run, stop
  ********************************************************************************/
 
+void BodyTrack::printArgsToConsole() {
+	// print args to console for debug
+	printf("Mode: %s\n", FLAG_mode ? "High Performance" : "High Quality");
+	printf("Use CUDA Graph: %s\n", FLAG_useCudaGraph ? "true" : "false");
+	printf("Chosen GPU: %d\n", FLAG_chosenGPU);
+	printf("Shadow Tracking Age: %d\n", FLAG_shadowTrackingAge);
+	printf("Probation Age: %d\n", FLAG_probationAge);
+	printf("Max Targets Tracked: %d\n", FLAG_maxTargetsTracked);
+
+	switch (FLAG_videoSource) {
+	case webcam:
+		printf("Video Source: Webcam\n");
+		printf("Webcam Index: %d\n", FLAG_camIndex);
+		printf("Webcam Resolution: %s\n", FLAG_camRes.c_str());
+		printf("Draw Window: %s\n", FLAG_drawWindow ? "true" : "false");
+		printf("Draw Tracking Info: %s\n", FLAG_drawTracking ? "true" : "false");
+		printf("Draw FPS: %s\n", FLAG_drawFPS ? "true" : "false");
+		break;
+	case sharedMemory:
+		printf("Video Source: Shared Memory\n");
+		printf("Draw Window: %s\n", FLAG_drawWindow ? "true" : "false");
+		printf("Draw Tracking Info: %s\n", FLAG_drawTracking ? "true" : "false");
+		printf("Draw FPS: %s\n", FLAG_drawFPS ? "true" : "false");
+		break;
+	case videoFile:
+		printf("Video Source: Video File\n");
+		printf("Capture Outputs: %s\n", FLAG_captureOutputs ? "true" : "false");
+		printf("Capture Codec: %s\n", FLAG_captureCodec.c_str());
+		break;
+	default:
+		printf("Video Source: UNKNOWN\n");
+		break;
+	}
+}
+
 int main(int argc, char** argv) {
 	// Parse the arguments
 	if (0 != ParseMyArgs(argc, argv)) return -100;
@@ -995,37 +1050,57 @@ int main(int argc, char** argv) {
 	BodyTrack app;
 	BodyTrack::Err doErr = BodyTrack::Err::errNone;
 
+	// start initializing the tracking
 	app.body_ar_engine.setAppMode(BodyEngine::mode(APP_MODE));
 	app.body_ar_engine.setMode(FLAG_mode);
 	app.body_ar_engine.setBodyStabilization(TEMPORAL_SMOOTHING);
 	app.body_ar_engine.useCudaGraph(FLAG_useCudaGraph);
 	app.body_ar_engine.enablePeopleTracking(ENABLE_MULTI_PEOPLE_TRACKING, FLAG_shadowTrackingAge, FLAG_probationAge, FLAG_maxTargetsTracked);
 
+	// based on appMode and mode, set NVIDIA model used for tracking
 	doErr = BodyTrack::errBodyModelInit;
 	if (FLAG_modelPath.empty()) {
 		printf("WARNING: Model path not specified. Please set --model_path=/path/to/trt/and/body/models, "
 			"SDK will attempt to load the models from NVAR_MODEL_DIR environment variable, "
 			"please restart your application after the SDK Installation. \n");
 	}
-	if (!FLAG_bodyModel.empty())
-		app.body_ar_engine.setBodyModel(FLAG_bodyModel.c_str());
+	else {
+		printf("Model Path: %s\n", FLAG_modelPath.c_str());
+	}
+	if (!bodyModel.empty()) {
+		app.body_ar_engine.setBodyModel(bodyModel.c_str());
+	}
 
-	if (FLAG_offlineMode) {
-		if (FLAG_inFile.empty()) {
+	// debug args read from batch file
+	app.printArgsToConsole();
+
+	// initialize video source 
+	offlineMode = FLAG_videoSource == videoFile;
+	if (offlineMode) {
+		// offline mode is only when video source is a file on disk
+		if (FLAG_inFilePath.empty()) {
 			doErr = BodyTrack::errMissing;
-			printf("ERROR: %s, please specify input file using --in_file or --in \n", app.errorStringFromCode(doErr));
+			printf("ERROR: %s, please specify input file using --in_file_path\n", app.errorStringFromCode(doErr));
 			goto bail;
 		}
-		doErr = app.initOfflineMode(FLAG_inFile.c_str(), FLAG_outFile.c_str());
+		doErr = app.initOfflineMode(FLAG_inFilePath.c_str(), FLAG_outFilePrefix.c_str());
 	}
 	else {
-		doErr = app.initCamera(FLAG_camRes.c_str());
+		if (FLAG_videoSource == webcam)
+			doErr = app.initCamera(FLAG_camRes.c_str());
+		else if (FLAG_videoSource == sharedMemory)
+			doErr = app.initSharedMemory();
 	}
 	BAIL_IF_ERR(doErr);
+	printf(".\nInitialized video stream...\n");
 
+	// initialize BodyEngine class based on model
 	doErr = app.initBodyEngine(FLAG_modelPath.c_str());
 	BAIL_IF_ERR(doErr);
+	printf("Initialized BodyEngine...\n");
 
+	// start analyzing the video each frame
+	printf("Starting to run...\n");
 	doErr = app.run();
 	BAIL_IF_ERR(doErr);
 
@@ -1040,15 +1115,20 @@ BodyTrack::Err BodyTrack::run() {
 
 	BodyTrack::Err doErr = errNone;
 	BodyEngine::Err err = body_ar_engine.initFeatureIOParams();
-	if (err != BodyEngine::Err::errNone) 
+	if (err != BodyEngine::Err::errNone)
 		return doAppErr(err);
-	
-	while (1) {
-		//printf(">> frame %d \n", framenum++);
 
-		doErr = acquireFrame();
-		
-		if (FLAG_offlineMode && frame.empty()) {
+	while (1) {
+		// get frame based on desired video source
+		// "frame" is a global variable shared among functions
+		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile) {
+			doErr = acquireFrame();
+		}
+		else if (FLAG_videoSource == sharedMemory) {
+			doErr = acquireSharedMemFrame();
+		}
+
+		if (offlineMode && frame.empty()) {
 			// We have reached the end of the video so return without any error
 			return BodyTrack::errNone;
 		}
@@ -1056,27 +1136,31 @@ BodyTrack::Err BodyTrack::run() {
 			return doErr;
 		}
 
+		// get joint keypoint data and bounding box data
 		doErr = acquireBodyBoxAndKeyPoints();
 
-		if (FLAG_offlineMode && (doErr == BodyTrack::errNoBody || doErr == BodyTrack::errBodyFit)) {
+		if (offlineMode && (doErr == BodyTrack::errNoBody || doErr == BodyTrack::errBodyFit)) {
+			// write frame to output file
 			bodyDetectOutputVideo.write(frame);
 			keyPointsOutputVideo.write(frame);
 		}
-		
-		if (doErr == BodyTrack::errCancel || doErr == BodyTrack::errVideo) 
+
+		if (doErr == BodyTrack::errCancel || doErr == BodyTrack::errVideo)
 			return doErr;
-				
-		if (!FLAG_offlineMode) {
+
+		if (!offlineMode) {
 			if (!frame.empty()) {
-				if (FLAG_drawVisualization)
+				if (FLAG_drawFPS)
 					drawFPS(frame);
-				cv::imshow(windowTitle, frame);
+				if (FLAG_drawWindow)
+					cv::imshow(windowTitle, frame);
 			}
 			int n = cv::waitKey(1);
 			if (n >= 0) {
 				static const int ESC_KEY = 27;
 				if (n == ESC_KEY) break;
 				/*
+				// This is leftover from parsing keys on the keyboard but might be useful
 				 switch (n) {
 				 case '1':
 						body_ar_engine.destroyFeatures();
@@ -1103,7 +1187,7 @@ BodyTrack::Err BodyTrack::run() {
 
 void BodyTrack::stop() {
 	body_ar_engine.destroyFeatures();
-	if (FLAG_offlineMode) {
+	if (offlineMode) {
 		bodyDetectOutputVideo.release();
 		keyPointsOutputVideo.release();
 	}

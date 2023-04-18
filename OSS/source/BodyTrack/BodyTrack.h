@@ -62,6 +62,7 @@ public:
 	
 	void getFPS();
 	void drawFPS(cv::Mat& img);
+	void printArgsToConsole();
 
 	void writeVideoAndEstResults(const cv::Mat& frame, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints = NULL);
 	void writeFrameAndEstResults(const cv::Mat& frame, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints = NULL);
