@@ -44,6 +44,18 @@
 #include "SharedMem/UT_Mutex.h"
 #include "SharedMem/UT_SharedMem.h"
 
+// sending over osc
+#include "osc/OscOutboundPacketStream.h"
+#include "ip/UdpSocket.h"
+#include "ip/IpEndpointName.h"
+#include <process.h>	// for PID
+
+// using cuda for gpu distribution
+#include "cuda/cuda.h"
+#include "cuda/cuda_device_runtime_api.h"
+#include "cuda/cuda_runtime_api.h"
+#include "cuda/cudart_platform.h"
+
 // helper classes
 #include "Timer.h"
 
@@ -117,6 +129,11 @@ const int LEFT_THUMB_TIP = 32;
 const int RIGHT_THUMB_TIP = 33;
 
 const int NUM_KEYPOINTS = 34;
+
+std::string MAXINE_JOINT_NAMES[NUM_KEYPOINTS] = { "pelvis", "left_hip", "right_hip", "torso", "left_knee", "right_knee", "neck", "left_ankle", "right_ankle", "left_big_toe",
+								"right_big_toe", "left_small_toe", "right_small_toe", "left_heel", "right_heel", "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+								"left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_pinky_knuckle", "right_pinky_knuckle",
+								"left_middle_tip", "right_middle_tip", "left_index_knuckle", "right_index_knuckle", "left_thumb_tip", "right_thumb_tip" };
 
 // Batch Size has to be 8 when people tracking is enabled
 const unsigned int PEOPLE_TRACKING_BATCH_SIZE = 8;
@@ -195,6 +212,18 @@ bool offlineMode = false;				// False: Webcam or SharedMem, True: Video file
 // designates model selection within modelPath folder based on mode and appMode
 std::string bodyModel;					// set automatically based on PC hardware
 
+// OSC communication
+#define OUTPUT_BUFFER_SIZE 1024
+UdpTransmitSocket* transmitSocket_keypoints;
+UdpTransmitSocket* transmitSocket_status;
+const std::string USER_STR = "/user";
+const std::string FPS_STR = "/fps";
+const std::string PULSE_STR = "/pulse";
+const std::string PID_STR = "/pid";
+
+// process id
+int pid = _getpid();
+
 /********************************************************************************
  * command-line arguments
  ********************************************************************************/
@@ -218,13 +247,14 @@ FLAG_sharedMemName = "TOPtest";
 
 unsigned int
 FLAG_videoSource = sharedMemory,		// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
-//FLAG_videoSource = webcam,				// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
 FLAG_mode = highPerformance,			// 0: High Quality, 1: High Performance -> default to high performance
 FLAG_chosenGPU = 0,						// Index of GPU to run the Maxine executable
 FLAG_camIndex = 0,						// Index of webcam connected to the PC
 FLAG_shadowTrackingAge = 90,			// Sets the Shadow Tracking Age, after which tracking information for a person is removed. The default value is 90 (frames).
 FLAG_probationAge = 10,					// Sets the Probation Age, after which tracking information for a person is addedd. The default value is 10 (frames).
-FLAG_maxTargetsTracked = 30;			// Sets the Maxinum Targets Tracked. The default value is 30, and the minimum is value is 1.
+FLAG_maxTargetsTracked = 30,			// Sets the Maxinum Targets Tracked. The default value is 30, and the minimum is value is 1.
+FLAG_keypointsPort = 7000,				// Sets the port on which we send out all keypoint data (for all 8 users)
+FLAG_statusPort = 7001;					// Sets the port on which we send out FPS, Pulse, and PID data
 
 /********************************************************************************
  * parsing command line args
@@ -234,26 +264,29 @@ static void Usage() {
 	printf(
 		"BodyTrack [<args> ...]\n"
 		"where <args> is:\n"
-		" --mode[=0|1]							Model Mode. 0: High Quality, 1: High Performance. Default is 1.\n"
-		" --draw_tracking[=(true|false)]		Draw tracking information (joints, bbox) on top of frame. Default is true.\n"
-		" --draw_window[=(true|false)]			Draw video feed to window on desktop. Default is true.\n"
-		" --draw_fps[=(true|false)]				Draw FPS debug information on top of frame. Default is true.\n"
-		" --use_cuda_graph[=(true|false)]		Enable faster execution by using cuda graph to capture engine execution. Default is true.\n"
-		" --chosen_gpu[=(0|1|2|3|..)]			GPU index for running the Maxine instance. Default is 0.\n"
-		" --video_source[=(0|1|2)]				Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TD). Default is 0.\n"
-		" --cam_index[=(0|1|2|3|..)]			Specify the webcam index we want to use for the video feed. Default is 0.\n"
-		" --shared_mem_name=<string>			Specify the string name for Shared Memory from TouchDesigner. Default is 'TOPshm'.\n"
-		" --capture_outputs[=(true|false)]		Enables video/image capture and writing data to file. Default is false.\n"
-		" --cam_res=[WWWx]HHH					Specify webcam resolution as height or width x height (--cam_res=640x480 or --cam_res=480). Default is empty string.\n"
-		" --in_file_path=<file>					Specify the input file. Default is empty string.\n"
-		" --out_file_prefix=<file>				Specify the output file name (no extension like .mp4). Default is empty string.\n"
-		" --codec=<fourcc>						FOURCC code for the desired codec. Default is H264 (avc1).\n"
-		" --model_path=<path>					Specify the directory containing the TRT models.\n"
-		" --shadow_tracking_age=<int>			Shadow Tracking Age (frames), after which tracking info of a person is removed. Default is 90.\n"
-		" --probation_age=<int>					Length of probationary period (frames), after which tracking info of a person is added. Default is 10.\n"
-		" --max_targets_tracked=<int>			Maximum number of targets to be tracked. Default is 30, min value is 1.\n"
-		" --debug[=(true|false)]				Report debugging timing info to console. Default is false.\n"
-		" --verbose[=(true|false)]				Report keypoint joint info to console. Default is false.\n"
+		" --mode[=0|1]						Model Mode. 0: High Quality, 1: High Performance. Default is 1.\n"
+		" --draw_tracking[=(true|false)]	Draw tracking information (joints, bbox) on top of frame. Default is true.\n"
+		" --draw_window[=(true|false)]		Draw video feed to window on desktop. Default is true.\n"
+		" --draw_fps[=(true|false)]			Draw FPS debug information on top of frame. Default is true.\n"
+		" --use_cuda_graph[=(true|false)]	Enable faster execution by using cuda graph to capture engine execution. Default is true.\n"
+		" --chosen_gpu[=(0|1|2|3|..)]		GPU index for running the Maxine instance. Default is 0.\n"
+		" --video_source[=(0|1|2)]			Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TD). Default is 0.\n"
+		" --cam_index[=(0|1|2|3|..)]		Specify the webcam index we want to use for the video feed. Default is 0.\n"
+		" --shared_mem_name=<string>		Specify the string name for Shared Memory from TouchDesigner. Default is 'TOPshm'.\n"
+		" --capture_outputs[=(true|false)]	Enables video/image capture and writing data to file. Default is false.\n"
+		" --cam_res=[WWWx]HHH				Specify webcam resolution as height or width x height (--cam_res=640x480 or --cam_res=480). Default is empty string.\n"
+		" --in_file_path=<file>				Specify the input file. Default is empty string.\n"
+		" --out_file_prefix=<file>			Specify the output file name (no extension like .mp4). Default is empty string.\n"
+		" --codec=<fourcc>					FOURCC code for the desired codec. Default is H264 (avc1).\n"
+		" --model_path=<path>				Specify the directory containing the TRT models.\n"
+		" --shadow_tracking_age=<int>		Shadow Tracking Age (frames), after which tracking info of a person is removed. Default is 90.\n"
+		" --probation_age=<int>				Length of probationary period (frames), after which tracking info of a person is added. Default is 10.\n"
+		" --max_targets_tracked=<int>		Maximum number of targets to be tracked. Default is 30, min value is 1.\n"
+		" --send_osc[=(true|false)]			Enables sending of OSC data to TouchDesigner. Default is true."		
+		" --status_port=<0000>				Port for sending out status data (fps, pulse, pid) over OSC. Default is 7000.\n"
+		" --keypoints_port=<0000>			Port for sending out keypoint data (for all 8 possible users) over OSC. Default is 7001.\n"
+		" --debug[=(true|false)]			Report debugging timing info to console. Default is false.\n"
+		" --verbose[=(true|false)]			Report keypoint joint info to console. Default is false.\n"
 	);
 }
 
@@ -342,6 +375,8 @@ static int ParseMyArgs(int argc, char** argv) {
 			GetFlagArgVal("shadow_tracking_age", arg, &FLAG_shadowTrackingAge) ||
 			GetFlagArgVal("probation_age", arg, &FLAG_probationAge) ||
 			GetFlagArgVal("max_targets_tracked", arg, &FLAG_maxTargetsTracked) ||
+			GetFlagArgVal("status_port", arg, &FLAG_statusPort) ||
+			GetFlagArgVal("keypoints_port", arg, &FLAG_keypointsPort) ||
 			GetFlagArgVal("debug", arg, &FLAG_debug) ||
 			GetFlagArgVal("verbose", arg, &FLAG_verbose)
 			)) {
@@ -411,6 +446,67 @@ const char* BodyTrack::errorStringFromCode(BodyTrack::Err code) {
 	static char msg[18];
 	snprintf(msg, sizeof(msg), "error #%d", code);
 	return msg;
+}
+
+namespace osc {
+
+	void InitOSC()
+	{
+		transmitSocket_keypoints = new UdpTransmitSocket(IpEndpointName("127.0.0.1", FLAG_keypointsPort));
+		transmitSocket_status = new UdpTransmitSocket(IpEndpointName("127.0.0.1", FLAG_statusPort));
+	}
+
+	void SendKeypointData(std::vector<NvAR_Point2f>& keypoints2D_sorted)
+	{
+		char buffer_keypoints[OUTPUT_BUFFER_SIZE] = {};
+		osc::OutboundPacketStream packet_keypoints(buffer_keypoints, OUTPUT_BUFFER_SIZE);
+
+		// step through captured maxine points and send them over OSC
+		for (int userIndex = 0; userIndex < PEOPLE_TRACKING_BATCH_SIZE; userIndex++)
+		{
+			for (int maxineKP = 0; maxineKP < NUM_KEYPOINTS; maxineKP++)
+			{
+				int idxOffset = userIndex * NUM_KEYPOINTS;
+				std::string jointName = MAXINE_JOINT_NAMES[maxineKP];
+				NvAR_Point2f pt = keypoints2D_sorted[idxOffset + maxineKP];
+				float ptx = (float)pt.x;
+				float pty = (float)pt.y;
+
+				// convert data to readable strings
+				std::string kpIdx = std::to_string(maxineKP);
+				std::string userIdx = std::to_string(userIndex);
+				std::string oscAddyStrX = USER_STR + "_" + userIdx + "_" + kpIdx + "_" + jointName + "_x";
+				std::string oscAddyStrY = USER_STR + "_" + userIdx + "_" + kpIdx + "_" + jointName + "_y";
+
+				// send OSC bundle -- each user has their own keypoint osc endpoint
+				// send x position data
+				packet_keypoints.Clear();
+				packet_keypoints << osc::BeginMessage(oscAddyStrX.c_str()) << ptx << osc::EndMessage;
+				transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());
+	
+				// send y position data
+				packet_keypoints.Clear();
+				packet_keypoints << osc::BeginMessage(oscAddyStrY.c_str()) << pty << osc::EndMessage;
+				transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());
+			}
+		}
+	}
+
+	void SendStatusData(float fps)
+	{
+		char buffer_status[OUTPUT_BUFFER_SIZE] = {};
+		osc::OutboundPacketStream packet_fps(buffer_status, OUTPUT_BUFFER_SIZE);
+
+		int pulse = int(fps) % 2;
+
+		packet_fps.Clear();
+		packet_fps << osc::BeginBundleImmediate
+			<< osc::BeginMessage(FPS_STR.c_str()) << std::to_string(fps).c_str() << osc::EndMessage
+			<< osc::BeginMessage(PULSE_STR.c_str()) << std::to_string(pulse).c_str() << osc::EndMessage
+			<< osc::BeginMessage(PID_STR.c_str()) << std::to_string(pid).c_str() << osc::EndMessage
+			<< osc::EndBundle;
+		transmitSocket_status->Send(packet_fps.Data(), packet_fps.Size());
+	}
 }
 
 /********************************************************************************
