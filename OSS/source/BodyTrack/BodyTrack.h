@@ -10,6 +10,7 @@ public:
 	~BodyTrack();
 	static const char windowTitle[];
 
+
 	enum Err {
 		errNone = BodyEngine::Err::errNone,
 		errGeneral = BodyEngine::Err::errGeneral,
@@ -56,6 +57,7 @@ public:
 	Err acquireWebcamOrVideoFrame();
 	Err acquireSharedMemFrame();
 	Err acquireBodyBoxAndKeyPoints();
+	//bool compareRoots(Root r1, Root r2);
 
 	void DrawKeyPointsAndEdges(const cv::Mat& src, NvAR_Point2f* keypoints, int numKeyPoints, NvAR_TrackingBBoxes* output_bbox);
 	void DrawKeyPointLine(cv::Mat& frm, NvAR_Point2f* keypoints);
@@ -85,4 +87,5 @@ public:
 	float expr[6];
 	float scaleOffsetXY[4];
 	std::vector<cv::Scalar> colorCodes = { cv::Scalar(255,255,255) };
+
 };

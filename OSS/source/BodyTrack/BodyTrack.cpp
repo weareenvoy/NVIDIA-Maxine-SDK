@@ -30,6 +30,9 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <map>
+
+using namespace std;
 
 // nvidia maxine
 #include "BodyEngine.h"
@@ -129,6 +132,8 @@ const int LEFT_THUMB_TIP = 32;
 const int RIGHT_THUMB_TIP = 33;
 
 const int NUM_KEYPOINTS = 34;
+
+NvAR_Point2f EMPTY_JOINT = { 0.0f, 0.0f };
 
 std::string MAXINE_JOINT_NAMES[NUM_KEYPOINTS] = { "pelvis", "left_hip", "right_hip", "torso", "left_knee", "right_knee", "neck", "left_ankle", "right_ankle", "left_big_toe",
 								"right_big_toe", "left_small_toe", "right_small_toe", "left_heel", "right_heel", "nose", "left_eye", "right_eye", "left_ear", "right_ear",
@@ -231,9 +236,9 @@ int pid = _getpid();
 
 bool
 FLAG_sendOsc = true,					// Send OSC data out of Maxine
-FLAG_drawTracking = true,				// Draw keypoint and bounding box data to window
-FLAG_drawWindow = true,					// Draw window with video feed to desktop
-FLAG_drawFPS = true,					// Write FPS debug information to window
+FLAG_drawTracking = false,				// Draw keypoint and bounding box data to window
+FLAG_drawWindow = false,				// Draw window with video feed to desktop
+FLAG_drawFPS = false,					// Write FPS debug information to window
 FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file. If input is video file, gets set to true
 FLAG_debug = false,						// Print debugging information to the console
 FLAG_verbose = false,					// Print extra information to the console
@@ -699,12 +704,8 @@ void BodyTrack::writeEstResults(std::ofstream& outputFile, NvAR_TrackingBBoxes o
 	 */
 
 	int bodyDetectOn = (body_ar_engine.appMode == BodyEngine::mode::bodyDetection ||
-		body_ar_engine.appMode == BodyEngine::mode::keyPointDetection)
-		? 1
-		: 0;
-	int keyPointDetectOn = (body_ar_engine.appMode == BodyEngine::mode::keyPointDetection)
-		? 1
-		: 0;
+		body_ar_engine.appMode == BodyEngine::mode::keyPointDetection) ? 1 : 0;
+	int keyPointDetectOn = (body_ar_engine.appMode == BodyEngine::mode::keyPointDetection) ? 1 : 0;
 	outputFile << bodyDetectOn << "," << keyPointDetectOn << "\n";
 
 	if (bodyDetectOn && output_bboxes.num_boxes) {
@@ -917,6 +918,14 @@ BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 	}
 }
 
+struct Root { float xPos; int index; };
+
+bool compareRoots(Root r1, Root r2)
+{
+	// Compares two roots according to x position
+	return (r1.xPos < r2.xPos);
+}
+
 BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 	Err err = errNone;
 	NvAR_BBoxes output_bbox;
@@ -924,13 +933,12 @@ BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 	std::chrono::steady_clock::time_point start, end;
 
 	std::vector<NvAR_Point2f> keypoints2D(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
+	std::vector<NvAR_Point2f> keypoints2D_sorted(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
 	std::vector<NvAR_Point3f> keypoints3D(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
 	std::vector<NvAR_Quaternion> jointAngles(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
 
 	try {
-		if (FLAG_debug) {
-			start = std::chrono::high_resolution_clock::now();
-		}
+		//if (FLAG_debug) start = std::chrono::high_resolution_clock::now();
 
 		//printf("trying to get bbox and kpoints...");
 		unsigned n;
@@ -938,50 +946,97 @@ BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 		n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(), jointAngles.data(), &output_tracking_bbox, 0);
 		//printf("acquired bbox and kpoints");
 
-		if (FLAG_debug) {
-			end = std::chrono::high_resolution_clock::now();
-			auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-			std::cout << "box+keypoints time: " << duration.count() << " microseconds" << std::endl;
-		}
+		if (n > 0) {
+			// body_ar_engine.acquireBodyBoxAndKeyPoints was successful
 
-		if (n && FLAG_verbose) {
-			printf("2D KeyPoints: [\n");
-			for (const auto& pt : keypoints2D) {
-				printf("%7.1f%7.1f\n", pt.x, pt.y);
+			/*
+			if (FLAG_debug) {
+				// print processing time to the console
+				end = std::chrono::high_resolution_clock::now();
+				auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+				std::cout << "box+keypoints time: " << duration.count() << " microseconds" << std::endl;
 			}
-			printf("]\n");
 
-			printf("3d KeyPoints: [\n");
-			for (const auto& pt : keypoints3D) {
-				printf("%7.1f%7.1f%7.1f\n", pt.x, pt.y, pt.z);
+			if (FLAG_verbose) {
+				// print keypoints info to the console
+				printf("2D KeyPoints: [\n");
+				for (const auto& pt : keypoints2D) {
+					printf("%7.1f%7.1f\n", pt.x, pt.y);
+				}
+				printf("]\n");
+
+				printf("3d KeyPoints: [\n");
+				for (const auto& pt : keypoints3D) {
+					printf("%7.1f%7.1f%7.1f\n", pt.x, pt.y, pt.z);
+				}
+				printf("]\n");
 			}
-			printf("]\n");
+			*/
+
+			// sort keypoints data from left -> right in order of x position of pelvic root of skeleton. put nonexistent users (zeros) at end
+			// x coords go from [0, image width] from left -> right
+			// id numbers continually increase and sometimes change for each user, so we're going to choose to disregard bbox id
+			// blocks of user data get returned randomly and out of order from keypoints2D[], so we want to enforce some sort of stability
+
+			// save the x position of each root with its index in the original array
+			// keypoints2D always returns enough data for 8 users -- the max number of people we can track at once
+			Root userRoots[] = {
+				{ keypoints2D[NUM_KEYPOINTS * 0].x, 0},
+				{ keypoints2D[NUM_KEYPOINTS * 1].x, 1},
+				{ keypoints2D[NUM_KEYPOINTS * 2].x, 2},
+				{ keypoints2D[NUM_KEYPOINTS * 3].x, 3},
+				{ keypoints2D[NUM_KEYPOINTS * 4].x, 4},
+				{ keypoints2D[NUM_KEYPOINTS * 5].x, 5},
+				{ keypoints2D[NUM_KEYPOINTS * 6].x, 6},
+				{ keypoints2D[NUM_KEYPOINTS * 7].x, 7}
+			};
+
+			// sort the joints numerically by root xPos, with zeros now going to the front. we're then gonna skip these zeros later. 
+			sort(userRoots, userRoots + PEOPLE_TRACKING_BATCH_SIZE, compareRoots);
+
+			int numTrackedUsers = output_tracking_bbox.num_boxes;	// how many bounding boxes (tracked users) that Maxined has found
+			int sortedUserIndex = 0;	// index of a block of data to go into keypoints2D_sorted
+			// start with the first non-zero root with the lowest x-coord, start loading its batch of points into keypoints2D_sorted
+			for (int userIndex = (PEOPLE_TRACKING_BATCH_SIZE - numTrackedUsers); userIndex < PEOPLE_TRACKING_BATCH_SIZE; userIndex++) {
+
+				auto currRoot = userRoots[userIndex];
+				int kpIndex = currRoot.index;
+
+				// load this user's block of data into our sorted array
+				for (int kp = 0; kp < NUM_KEYPOINTS; kp++) 
+					keypoints2D_sorted[sortedUserIndex * NUM_KEYPOINTS + kp] = keypoints2D[kpIndex * NUM_KEYPOINTS + kp];
+
+				sortedUserIndex++;
+			}
+			// load the rest of the spaces up with zeros
+			for (int userIndex = numTrackedUsers; userIndex < PEOPLE_TRACKING_BATCH_SIZE; userIndex++) {
+				for (int kp = 0; kp < NUM_KEYPOINTS; kp++)
+					keypoints2D_sorted[userIndex * NUM_KEYPOINTS + kp] = EMPTY_JOINT;
+			}
+
+			if (offlineMode && FLAG_captureOutputs) {
+				// write keypoint data to file on disk when processing a video file
+				writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
+				writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
+			}
+
+			if (FLAG_drawTracking) 
+				DrawKeyPointsAndEdges(frame, keypoints2D.data(), NUM_KEYPOINTS, &output_tracking_bbox);
+
+			if (FLAG_sendOsc) 
+				osc::SendKeypointData(keypoints2D_sorted);
+
+			frameIndex++;
+			return err;
 		}
-		if (n == 0) {
+		else {
+			// body_ar_engine.acquireBodyBoxAndKeyPoints was unsuccessful
 			return errNoBody;
 		}
-
-		if (FLAG_captureOutputs) {
-			writeFrameAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
-			writeVideoAndEstResults(frame, body_ar_engine.output_tracking_bboxes, keypoints2D.data());
-		}
-
-		if (FLAG_drawTracking) {
-			DrawKeyPointsAndEdges(frame, keypoints2D.data(), NUM_KEYPOINTS, &output_tracking_bbox);
-		}
-
-		if (FLAG_sendOsc) {
-			osc::SendKeypointData(keypoints2D);
-		}
-
-		frameIndex++;
-
-		return err;
 	}
 	catch (...) {
 		printf("(BodyTrack) Could not complete body_ar_engine.acquireBodyBoxAndKeyPoints()\n");
 		return errNone;
-		//return errSharedMemSeg;
 	}
 }
 
