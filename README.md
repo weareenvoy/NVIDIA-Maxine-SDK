@@ -31,7 +31,7 @@ Arguments are all prefixed with `--`. Ex, `BodyTrack.exe --help` or `BodyTrack.e
 | `chosen_gpu`          | [0, 1, 2, 3, ...]   | GPU index for running the Maxine instance. Default is 0. |
 | `video_source `       | [0, 1, 2]           | Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TD). Default is 0. |
 | `cam_index`           | [0, 1, 2, 3, ...]   | Specify the webcam index we want to use for the video feed. Default is 0. |
-| `shared_mem_name`     | string              | Specify the string name for Shared Memory from TouchDesigner. Default is "TOPshm". |
+| `shared_mem_name`     | string              | Specify the string name for Shared Memory from TouchDesigner. Default is "TOPShm". |
 | `capture_outputs`     | bool                | Enables video/image capture and writing data to file. Default is false. |
 | `cam_res`             | [WWWx]HHH (string)  | Specify webcam resolution as height or width x height (`--cam_res=640x480` or `--cam_res=480`). Default is empty string. |
 | `in_file_path`        | filepath            | Specify the input file. Default is empty string. |

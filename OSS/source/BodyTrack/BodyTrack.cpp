@@ -189,6 +189,7 @@ const int DEBUG_FONT_THICKNESS = 1;
 // for fps calculation
 const float TIME_CONSTANT = 16.f;
 const float FRAMETIME_THRESHOLD = 100.f;
+const float FPS_DELAY_THRESHOLD = 0.9f;
 
 // Made the executive decision that we only want to track multiple people and not limit outselves to only one user at a time
 const bool ENABLE_MULTI_PEOPLE_TRACKING = true;
@@ -229,6 +230,7 @@ int pid = _getpid();
  ********************************************************************************/
 
 bool
+FLAG_sendOsc = true,					// Send OSC data out of Maxine
 FLAG_drawTracking = true,				// Draw keypoint and bounding box data to window
 FLAG_drawWindow = true,					// Draw window with video feed to desktop
 FLAG_drawFPS = true,					// Write FPS debug information to window
@@ -243,7 +245,7 @@ FLAG_outFilePrefix,						// output file prefix for writing data to disk (path + 
 FLAG_camRes,							// If offlineMode=false, specifies the cam res. If width omitted, width is computed from height to give an aspect ratio of 4:3.
 FLAG_captureCodec = "avc1",				// avc1 = h264
 FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",	// default installation location
-FLAG_sharedMemName = "TOPtest";
+FLAG_sharedMemName = "TOPShm";
 
 unsigned int
 FLAG_videoSource = sharedMemory,		// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
@@ -375,6 +377,7 @@ static int ParseMyArgs(int argc, char** argv) {
 			GetFlagArgVal("shadow_tracking_age", arg, &FLAG_shadowTrackingAge) ||
 			GetFlagArgVal("probation_age", arg, &FLAG_probationAge) ||
 			GetFlagArgVal("max_targets_tracked", arg, &FLAG_maxTargetsTracked) ||
+			GetFlagArgVal("send_osc", arg, &FLAG_sendOsc) ||
 			GetFlagArgVal("status_port", arg, &FLAG_statusPort) ||
 			GetFlagArgVal("keypoints_port", arg, &FLAG_keypointsPort) ||
 			GetFlagArgVal("debug", arg, &FLAG_debug) ||
@@ -495,37 +498,17 @@ namespace osc {
 	void SendStatusData(float fps)
 	{
 		char buffer_status[OUTPUT_BUFFER_SIZE] = {};
-		osc::OutboundPacketStream packet_fps(buffer_status, OUTPUT_BUFFER_SIZE);
+		osc::OutboundPacketStream packet_status(buffer_status, OUTPUT_BUFFER_SIZE);
 
 		int pulse = int(fps) % 2;
 
-		packet_fps.Clear();
-		packet_fps << osc::BeginBundleImmediate
-			<< osc::BeginMessage(FPS_STR.c_str()) << std::to_string(fps).c_str() << osc::EndMessage
-			<< osc::BeginMessage(PULSE_STR.c_str()) << std::to_string(pulse).c_str() << osc::EndMessage
-			<< osc::BeginMessage(PID_STR.c_str()) << std::to_string(pid).c_str() << osc::EndMessage
+		packet_status.Clear();
+		packet_status << osc::BeginBundleImmediate
+			<< osc::BeginMessage(FPS_STR.c_str()) << fps << osc::EndMessage
+			<< osc::BeginMessage(PULSE_STR.c_str()) << pulse << osc::EndMessage
+			<< osc::BeginMessage(PID_STR.c_str()) << pid << osc::EndMessage
 			<< osc::EndBundle;
-		transmitSocket_status->Send(packet_fps.Data(), packet_fps.Size());
-	}
-}
-
-/********************************************************************************
- * CUDA GPU selection
- ********************************************************************************/
-
-int chooseGPU() {
-	// If the system has multiple supported GPUs then the application
-	// should use CUDA driver APIs or CUDA runtime APIs to enumerate
-	// the GPUs and select one based on the application's requirements
-
-	if (FLAG_useCudaGraph) {
-		printf("Chosen GPU: %d\n", FLAG_chosenGPU);
-		// TODO: set CUDA device:
-		//cudaError_t err = cudaSetDevice(FLAG_chosenGPU);
-		return 0;
-	}
-	else {
-		return 0;
+		transmitSocket_status->Send(packet_status.Data(), packet_status.Size());
 	}
 }
 
@@ -840,11 +823,26 @@ void BodyTrack::getFPS() {
 }
 
 void BodyTrack::drawFPS(cv::Mat& img) {
-	getFPS();
+	//getFPS();	// pulling this out so it only gets called once on a global var
 	if (frameTime && FLAG_drawFPS) {
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%.1f", 1. / frameTime);
 		cv::putText(img, buf, cv::Point(img.cols - 80, img.rows - 10), FONT_FACE, DEBUG_TEXT_SCALE, DEBUG_TEXT_COLOR, DEBUG_FONT_THICKNESS);
+	}
+}
+
+void BodyTrack::sendFPS() {
+	if (FLAG_sendOsc) {
+		fpsSendDelayTimer.pause();
+		float fpsDelayTime = (float)fpsSendDelayTimer.elapsedTimeFloat();
+		if (fpsDelayTime >= FPS_DELAY_THRESHOLD) {
+			osc::SendStatusData(1. / frameTime);
+			fpsSendDelayTimer.stop();
+			fpsSendDelayTimer.start();
+		}
+		else {
+			fpsSendDelayTimer.resume();
+		}
 	}
 }
 
@@ -970,6 +968,10 @@ BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 
 		if (FLAG_drawTracking) {
 			DrawKeyPointsAndEdges(frame, keypoints2D.data(), NUM_KEYPOINTS, &output_tracking_bbox);
+		}
+
+		if (FLAG_sendOsc) {
+			osc::SendKeypointData(keypoints2D);
 		}
 
 		frameIndex++;
@@ -1111,6 +1113,17 @@ BodyTrack::Err BodyTrack::initOfflineMode(const char* inputFilename, const char*
 	return Err::errNone;
 }
 
+void BodyTrack::initCudaGPU() {
+	// If the system has multiple supported GPUs then the application
+	// should use CUDA driver APIs or CUDA runtime APIs to enumerate
+	// the GPUs and select one based on the application's requirements
+
+	if (FLAG_useCudaGraph) {
+		printf("Chosen GPU: %d\n", FLAG_chosenGPU);
+		cudaError_t err = cudaSetDevice(FLAG_chosenGPU);
+	}
+}
+
 /********************************************************************************
  * main, run, stop
  ********************************************************************************/
@@ -1123,7 +1136,6 @@ void BodyTrack::printArgsToConsole() {
 	printf("Shadow Tracking Age: %d\n", FLAG_shadowTrackingAge);
 	printf("Probation Age: %d\n", FLAG_probationAge);
 	printf("Max Targets Tracked: %d\n", FLAG_maxTargetsTracked);
-
 	switch (FLAG_videoSource) {
 	case webcam:
 		printf("Video Source: Webcam\n");
@@ -1148,6 +1160,11 @@ void BodyTrack::printArgsToConsole() {
 		printf("Video Source: UNKNOWN\n");
 		break;
 	}
+	printf("Send OSC data: %s\n", FLAG_sendOsc ? "true" : "false");
+	if (FLAG_sendOsc) {
+		printf("Status Port: %d\n", FLAG_statusPort);
+		printf("Keypoints Port: %d\n", FLAG_keypointsPort);
+	}
 }
 
 int main(int argc, char** argv) {
@@ -1158,10 +1175,11 @@ int main(int argc, char** argv) {
 	BodyTrack::Err doErr = BodyTrack::Err::errNone;
 
 	// start initializing the tracking
+	app.initCudaGPU();
+	app.body_ar_engine.useCudaGraph(FLAG_useCudaGraph);
 	app.body_ar_engine.setAppMode(BodyEngine::mode(APP_MODE));
 	app.body_ar_engine.setMode(FLAG_mode);
 	app.body_ar_engine.setBodyStabilization(TEMPORAL_SMOOTHING);
-	app.body_ar_engine.useCudaGraph(FLAG_useCudaGraph);
 	app.body_ar_engine.enablePeopleTracking(ENABLE_MULTI_PEOPLE_TRACKING, FLAG_shadowTrackingAge, FLAG_probationAge, FLAG_maxTargetsTracked);
 
 	// based on appMode and mode, set NVIDIA model used for tracking
@@ -1193,6 +1211,7 @@ int main(int argc, char** argv) {
 		doErr = app.initOfflineMode(FLAG_inFilePath.c_str(), FLAG_outFilePrefix.c_str());
 	}
 	else {
+		// initialize webcam or shared memory
 		if (FLAG_videoSource == webcam)
 			doErr = app.initCamera(FLAG_camRes.c_str());
 		else if (FLAG_videoSource == sharedMemory)
@@ -1205,6 +1224,11 @@ int main(int argc, char** argv) {
 	doErr = app.initBodyEngine(FLAG_modelPath.c_str());
 	BAIL_IF_ERR(doErr);
 	printf("Initialized BodyEngine...\n");
+
+	if (FLAG_sendOsc) {
+		osc::InitOSC();
+		printf("Initialized OSC communication...\n");
+	}
 
 	// start analyzing the video each frame
 	printf("Starting to run...\n");
@@ -1245,8 +1269,11 @@ BodyTrack::Err BodyTrack::run() {
 
 		// get joint keypoint data and bounding box data
 		doErr = acquireBodyBoxAndKeyPoints();
-		if (doErr == BodyTrack::errCancel || doErr == BodyTrack::errVideo)
-			return doErr;
+		if (doErr == BodyTrack::errCancel || doErr == BodyTrack::errVideo) return doErr;
+
+		// evaluate fps and send out fps over oscc
+		getFPS();
+		sendFPS();
 
 		// write frame to output file or to window
 		if (offlineMode) {
@@ -1264,8 +1291,8 @@ BodyTrack::Err BodyTrack::run() {
 
 			int n = cv::waitKey(1);
 			if (n >= 0) {
-				static const int ESC_KEY = 27;
-				if (n == ESC_KEY) break;
+				//static const int ESC_KEY = 27;
+				//if (n == ESC_KEY) break;
 				/*
 				// This is leftover from parsing keys on the keyboard but might be useful
 				 switch (n) {

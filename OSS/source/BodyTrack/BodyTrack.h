@@ -47,6 +47,7 @@ public:
 	Err run();
 	void stop();
 
+	void initCudaGPU();
 	Err initBodyEngine(const char* modelPath = nullptr);
 	Err initCamera(const char* camRes = nullptr);
 	Err initOfflineMode(const char* inputFilename = nullptr, const char* outputFilename = nullptr);
@@ -62,6 +63,7 @@ public:
 	
 	void getFPS();
 	void drawFPS(cv::Mat& img);
+	void sendFPS();
 	void printArgsToConsole();
 
 	void writeVideoAndEstResults(const cv::Mat& frame, NvAR_TrackingBBoxes output_bboxes, NvAR_Point2f* keypoints = NULL);
@@ -78,6 +80,7 @@ public:
 	int frameIndex;
 	double frameTime;
 	Timer frameTimer;
+	Timer fpsSendDelayTimer;
 
 	float expr[6];
 	float scaleOffsetXY[4];
