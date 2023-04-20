@@ -23,11 +23,16 @@ if(MSVC)
 		message("MSVC_VERSION ${MSVC_VERSION} is not accommodated")
 	endif()
 
-	add_library(opencv346 INTERFACE)
 	set(OpenCV_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencv/include ${CMAKE_CURRENT_SOURCE_DIR}/opencv/include/opencv2)
+    # include opencv_world346.lib for release
+	add_library(opencv346 INTERFACE)
 	target_include_directories(opencv346 INTERFACE ${OpenCV_INCLUDE_DIR})
 	target_link_libraries(opencv346 INTERFACE optimized ${CMAKE_CURRENT_SOURCE_DIR}/opencv/lib/opencv_world346.lib)
-	set(OpenCV_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencv/include ${CMAKE_CURRENT_SOURCE_DIR}/opencv/include/opencv2)
+    # include opencv_world346.lib for debug
+	add_library(opencv346d INTERFACE)
+    target_include_directories(opencv346d INTERFACE ${OpenCV_INCLUDE_DIR})
+	target_link_libraries(opencv346d INTERFACE optimized ${CMAKE_CURRENT_SOURCE_DIR}/opencv/lib/opencv_world346d.lib)
+    
 else()
     find_package(OpenCV REQUIRED
         PATHS /usr /usr/local

@@ -214,10 +214,11 @@ FLAG_outFilePrefix,						// output file prefix for writing data to disk (path + 
 FLAG_camRes,							// If offlineMode=false, specifies the cam res. If width omitted, width is computed from height to give an aspect ratio of 4:3.
 FLAG_captureCodec = "avc1",				// avc1 = h264
 FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",	// default installation location
-FLAG_sharedMemName = "TOPshm";
+FLAG_sharedMemName = "TOPtest";
 
 unsigned int
-FLAG_videoSource = webcam,				// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
+FLAG_videoSource = sharedMemory,		// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
+//FLAG_videoSource = webcam,				// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
 FLAG_mode = highPerformance,			// 0: High Quality, 1: High Performance -> default to high performance
 FLAG_chosenGPU = 0,						// Index of GPU to run the Maxine executable
 FLAG_camIndex = 0,						// Index of webcam connected to the PC
@@ -779,8 +780,9 @@ BodyTrack::Err BodyTrack::acquireWebcamOrVideoFrame() {
 BodyTrack::Err BodyTrack::acquireSharedMemFrame()
 {
 	/*
-	*  !! IMPORTANT !!
-	* Your video input must be flipped along the X before getting to the Shared Mem Out TOP
+	* !! IMPORTANT !!
+	* Your video input must be flipped along the Y before getting to the Shared Mem Out TOP
+	* Use a Flip TOP before the Shared Mem Out TOP and toggle "Flip Y" to ON.
 	*/
 
 	// Before you read or write to the memory, you need to lock it.
@@ -827,19 +829,20 @@ BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 	NvAR_TrackingBBoxes output_tracking_bbox;
 	std::chrono::steady_clock::time_point start, end;
 
-	int numKeyPoints = body_ar_engine.getNumKeyPoints();
-	std::vector<NvAR_Point2f> keypoints2D(numKeyPoints * PEOPLE_TRACKING_BATCH_SIZE);
-	std::vector<NvAR_Point3f> keypoints3D(numKeyPoints * PEOPLE_TRACKING_BATCH_SIZE);
-	std::vector<NvAR_Quaternion> jointAngles(numKeyPoints * PEOPLE_TRACKING_BATCH_SIZE);
+	std::vector<NvAR_Point2f> keypoints2D(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
+	std::vector<NvAR_Point3f> keypoints3D(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
+	std::vector<NvAR_Quaternion> jointAngles(NUM_KEYPOINTS * PEOPLE_TRACKING_BATCH_SIZE);
 
 	try {
 		if (FLAG_debug) {
 			start = std::chrono::high_resolution_clock::now();
 		}
 
+		//printf("trying to get bbox and kpoints...");
 		unsigned n;
 		// get keypoints in original image resolution coordinate space
 		n = body_ar_engine.acquireBodyBoxAndKeyPoints(frame, keypoints2D.data(), keypoints3D.data(), jointAngles.data(), &output_tracking_bbox, 0);
+		//printf("acquired bbox and kpoints");
 
 		if (FLAG_debug) {
 			end = std::chrono::high_resolution_clock::now();
@@ -870,7 +873,7 @@ BodyTrack::Err BodyTrack::acquireBodyBoxAndKeyPoints() {
 		}
 
 		if (FLAG_drawTracking) {
-			DrawKeyPointsAndEdges(frame, keypoints2D.data(), numKeyPoints, &output_tracking_bbox);
+			DrawKeyPointsAndEdges(frame, keypoints2D.data(), NUM_KEYPOINTS, &output_tracking_bbox);
 		}
 
 		frameIndex++;
@@ -920,7 +923,7 @@ BodyTrack::Err BodyTrack::initSharedMemory() {
 		printf("No shared memory in initialization\n");
 		return errSharedMem;
 	}
-	else printf("Created a UT_SharedMem successfully!\n");
+	else printf("Created a UT_SharedMem successfully!\n"); 
 
 	// lock test
 	if (!shm->tryLock(5000)) {
@@ -1158,6 +1161,8 @@ BodyTrack::Err BodyTrack::run() {
 			if (!frame.empty() && FLAG_drawWindow) {
 				if (FLAG_drawFPS)
 					drawFPS(frame);
+			}
+			if (FLAG_drawWindow) {
 				cv::imshow(windowTitle, frame);
 			}
 

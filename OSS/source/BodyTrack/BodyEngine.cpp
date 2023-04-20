@@ -463,8 +463,7 @@ unsigned BodyEngine::acquireBodyBoxAndKeyPoints(cv::Mat& src, NvAR_Point2f* refM
 	return n;
 }
 
-unsigned BodyEngine::acquireBodyBoxAndKeyPoints(cv::Mat& src, NvAR_Point2f* refMarks, NvAR_Point3f* refKeyPoints3D,
-	NvAR_Quaternion* refJointAngles, NvAR_TrackingBBoxes* refBodyBoxes, int /*variant*/) {
+unsigned BodyEngine::acquireBodyBoxAndKeyPoints(cv::Mat& src, NvAR_Point2f* refMarks, NvAR_Point3f* refKeyPoints3D,	NvAR_Quaternion* refJointAngles, NvAR_TrackingBBoxes* refBodyBoxes, int /*variant*/) {
 	unsigned n = 0;
 	NvCVImage fxSrcChunkyCPU;
 	(void)NVWrapperForCVMat(&src, &fxSrcChunkyCPU);

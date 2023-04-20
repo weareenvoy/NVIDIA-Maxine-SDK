@@ -5,6 +5,13 @@ set(SOURCE_FILES
 	../utils/RenderingUtils.cpp 
 	../utils/SharedMem/UT_Mutex.cpp
 	../utils/SharedMem/UT_SharedMem.cpp
+	../utils/osc/OscOutboundPacketStream.cpp
+	../utils/osc/OscPrintReceivedElements.cpp
+	../utils/osc/OscReceivedElements.cpp
+	../utils/osc/OscTypes.cpp 
+	../utils/ip/IpEndpointName.cpp
+	../utils/ip/NetworkingUtils.cpp
+	../utils/ip/UdpSocket.cpp
 )
 set(HEADER_FILES 
 	BodyEngine.h
@@ -14,6 +21,25 @@ set(HEADER_FILES
 	../utils/SharedMem/UT_SharedMem.h
 	../utils/SharedMem/TOP_SharedMemHeader.h
 	../utils/SharedMem/CHOP_SharedMemHeader.h
+	../utils/cuda/cuda.h
+	../utils/cuda/cuda_device_runtime_api.h
+	../utils/cuda/cuda_runtime_api.h
+	../utils/cuda/cudart_platform.h
+	../utils/osc/MessageMappingOscPacketListener.h
+	../utils/osc/OscException.h
+	../utils/osc/OscHostEndianness.h
+	../utils/osc/OscOutboundPacketStream.h
+	../utils/osc/OscPacketListener.h
+	../utils/osc/OscPrintReceivedElements.h
+	../utils/osc/OscReceivedElements.h
+	../utils/osc/OscTypes.h
+	../utils/ip/UdpSocket.h
+	../utils/ip/PacketListener.h
+	../utils/ip/IpEndpointName.h
+	../utils/ip/NetworkingUtils.h
+	../utils/ip/PacketListener.h
+	../utils/ip/TimerListener.h
+	../utils/ip/UdpSocket.h
 )
 
 if(MSVC)
@@ -38,6 +64,7 @@ if(MSVC)
 	target_link_libraries(
 		BodyTrack PUBLIC
 		opencv346
+		opencv346d
 		utils
 	)
 	set(ARSDK_PATH_STR ${CMAKE_CURRENT_SOURCE_DIR}/../../bin)
