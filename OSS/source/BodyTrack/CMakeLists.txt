@@ -61,12 +61,7 @@ target_include_directories(BodyTrack PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(BodyTrack PUBLIC ${SDK_INCLUDES_PATH})
 
 if(MSVC)
-	target_link_libraries(
-		BodyTrack PUBLIC
-		opencv346
-		opencv346d
-		utils
-	)
+	target_link_libraries(BodyTrack PUBLIC opencv346 utils)
 	set(ARSDK_PATH_STR ${CMAKE_CURRENT_SOURCE_DIR}/../../bin)
 	set(OPENCV_PATH_STR ${CMAKE_CURRENT_SOURCE_DIR}/../external/opencv/bin)
 	set(PATH_STR "PATH=%PATH%" ${OPENCV_PATH_STR})
