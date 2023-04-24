@@ -160,22 +160,22 @@ FLAG_drawTracking = true,				// Draw keypoint and bounding box data to window
 FLAG_drawWindow = true,					// Draw window with video feed to desktop
 FLAG_drawFPS = true,					// Write FPS debug information to window
 FLAG_useCudaGraph = true,				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
-FLAG_temporalSmoothing = true,			
+FLAG_temporalSmoothing = true,			// Temporally optimize face rect bounding box and facial landmarks
 FLAG_useDetailedLandmarks = false;		// Display 68 (false) or 126 (true) facial landmarks
 
 std::string
-FLAG_inFilePath = "D:/Leviathan/_Clients/_Envoy/NVIDIA-Maxine-SDK/_testvideos/GazeTrackingTest.mov",		// input file path on disk for video source (path + name + prefix)
-FLAG_outFilePath = "D:/Leviathan/_Clients/_Envoy/NVIDIA-Maxine-SDK/_testvideos/GazeTrackingTest_GazeTrack.mov",						// output file prefix for writing data to disk (path + name but should not include file time, like .mp4)
+FLAG_inFilePath,						// input file path on disk for video source (path + name + prefix)
+FLAG_outFilePath,						// output file path for writing data to disk (path + name + prefix)
 FLAG_camRes,							// If offlineMode=false, specifies the cam res. If width omitted, width is computed from height to give an aspect ratio of 4:3.
 FLAG_captureCodec = "avc1",				// avc1 = h264
 FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",	// default installation location
 FLAG_sharedMemName = "TOPShm";
 
 unsigned int
-FLAG_videoSource = videoFile,		// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
+FLAG_videoSource = sharedMemory,		// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
 FLAG_camIndex = 0,						// Index of webcam connected to the PC
 FLAG_chosenGPU = 0,
-FLAG_eyeSizeSensitivity = 3, 
+FLAG_eyeSizeSensitivity = 3,
 FLAG_keypointsPort = 7002,				// Sets the port on which we send out all keypoint data (for all 8 users)
 FLAG_statusPort = 7003;					// Sets the port on which we send out FPS, Pulse, and PID data
 
@@ -187,19 +187,26 @@ static void Usage() {
 	printf(
 		"GazeRedirect [<args> ...]\n"
 		"where <args> is\n"
-		" --temporal[=(true|false)]				temporally optimize face rect and landmarks\n"
-		" --capture_outputs[=(true|false)]		enables video/image capture and writing face detection/landmark outputs\n"
-		" --cam_res=[WWWx]HHH					specify resolution as height or width x height\n"
-		" --cam_id=<id>							by default 0, specify int ID of camera in case of multiple cameras \n"
-		" --codec=<fourcc>						FOURCC code for the desired codec (default H264)\n"
-		" --in=<file>							specify the  input file\n"
-		" --out=<file>							specify the output file\n"
-		" --model_path=<path>					specify the directory containing the TRT models\n"
-		" --landmarks_detailed[=(true|false)]   set the number of facial landmark points to 126, otherwise default to 68\n"
-		" --eyesize_sensitivity					set the eye size sensitivity parameter, an integer value between 2 and 6 (default 3)\n"
-		" --draw_visualization					draw the landmarks, display gaze estimation and head rotation, default to true\n"
-		" --redirect_gaze						redirection of the eyes in addition to estimating gaze, default to true\n"
-		" --use_cuda_graph						use cuda graph to optimize computations\n");
+		" --landmarks_detailed[=(true|false)]   Set the number of facial landmark points to 126 (true), otherwise 68 (false). Default is false.\n"
+		" --eyesize_sensitivity[=(2|3|4|5|6)]	Set the eye size sensitivity parameter, an integer value between 2 and 6. Default is 3.\n"
+		" --temporal[=(true|false)]				Temporally optimize face rect and landmarks. Default is true.\n"
+		" --draw_tracking[=(true|false)]		Draw tracking information (joints, bbox) on top of frame. Default is true.\n"
+		" --draw_window[=(true|false)]			Draw video feed to window on desktop. Default is true.\n"
+		" --draw_fps[=(true|false)]				Draw FPS debug information on top of frame. Default is true.\n"
+		" --use_cuda_graph[=(true|false)]		Enable faster execution by using cuda graph to capture engine execution. Default is true.\n"
+		" --chosen_gpu[=(0|1|2|3|..)]			GPU index for running the Maxine instance. Default is 0.\n"
+		" --video_source[=(0|1|2)]				Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TD). Default is 0.\n"
+		" --cam_index[=(0|1|2|3|..)]			Specify the webcam index we want to use for the video feed. Default is 0.\n"
+		" --shared_mem_name=<string>			Specify the string name for Shared Memory from TouchDesigner. Default is 'TOPshm'.\n"
+		" --cam_res=[WWWx]HHH					Specify webcam resolution as height or width x height (--cam_res=640x480 or --cam_res=480). Default is empty string.\n"
+		" --in_file_path=<file>					Specify the input file path. Default is empty string.\n"
+		" --out_file_path=<file>				Specify the output file path. Default is empty string.\n"
+		" --codec=<fourcc>						FOURCC code for the desired codec. Default is H264 (avc1).\n"
+		" --model_path=<path>					Specify the directory containing the TRT models.\n"
+		" --send_osc[=(true|false)]				Enables sending of OSC data to TouchDesigner. Default is true."
+		" --status_port=<0000>					Port for sending out status data (fps, pulse, pid) over OSC. Default is 7000.\n"
+		" --keypoints_port=<0000>				Port for sending out keypoint data (for all 8 possible users) over OSC. Default is 7001.\n"
+	);
 }
 
 static bool GetFlagArgVal(const char* flag, const char* arg, const char** val) {
@@ -274,20 +281,27 @@ static int ParseMyArgs(int argc, char** argv) {
 		if (arg[0] != '-') {
 			continue;
 		}
-		else if ((arg[1] == '-') &&	(
-				GetFlagArgVal("in", arg, &FLAG_inFilePath) ||
-				GetFlagArgVal("out", arg, &FLAG_outFilePath) ||
-				GetFlagArgVal("landmarks_126", arg, &FLAG_useDetailedLandmarks) ||
-				GetFlagArgVal("capture_outputs", arg, &captureOutputs) ||
-				GetFlagArgVal("cam_res", arg, &FLAG_camRes) ||
-				GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
-				GetFlagArgVal("cam_id", arg, &FLAG_camIndex) ||
-				GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
-				GetFlagArgVal("eyesize_sensitivity", arg, &FLAG_eyeSizeSensitivity) ||
-				GetFlagArgVal("temporal", arg, &FLAG_temporalSmoothing) ||
-				GetFlagArgVal("draw_visualization", arg, &FLAG_drawTracking) ||
-				GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph)
-				)) {
+		else if ((arg[1] == '-') && (
+			GetFlagArgVal("landmarks_detailed", arg, &FLAG_useDetailedLandmarks) ||
+			GetFlagArgVal("eyesize_sensitivity", arg, &FLAG_eyeSizeSensitivity) ||
+			GetFlagArgVal("temporal", arg, &FLAG_temporalSmoothing) ||
+			GetFlagArgVal("draw_tracking", arg, &FLAG_drawTracking) ||
+			GetFlagArgVal("draw_window", arg, &FLAG_drawWindow) ||
+			GetFlagArgVal("draw_fps", arg, &FLAG_drawFPS) ||
+			GetFlagArgVal("use_cuda_graph", arg, &FLAG_useCudaGraph) ||
+			GetFlagArgVal("chosen_gpu", arg, &FLAG_chosenGPU) ||
+			GetFlagArgVal("video_source", arg, &FLAG_videoSource) ||
+			GetFlagArgVal("cam_index", arg, &FLAG_camIndex) ||
+			GetFlagArgVal("shared_mem_name", arg, &FLAG_sharedMemName) ||
+			GetFlagArgVal("cam_res", arg, &FLAG_camRes) ||
+			GetFlagArgVal("in_file_path", arg, &FLAG_inFilePath) ||
+			GetFlagArgVal("out_file_path", arg, &FLAG_outFilePath) ||
+			GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
+			GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
+			GetFlagArgVal("send_osc", arg, &FLAG_sendOsc) ||
+			GetFlagArgVal("status_port", arg, &FLAG_statusPort) ||
+			GetFlagArgVal("keypoints_port", arg, &FLAG_keypointsPort) 
+			)) {
 			continue;
 		}
 		else if (GetFlagArgVal("help", arg, &help)) {
@@ -351,40 +365,29 @@ namespace osc {
 		transmitSocket_status = new UdpTransmitSocket(IpEndpointName("127.0.0.1", FLAG_statusPort));
 	}
 
-	void SendKeypointData(std::vector<NvAR_Point2f>& keypoints2D_sorted)
+	void SendGazeData(float gazeX, float gazeY, float headX, float headY, float headZ)
 	{
 		char buffer_keypoints[OUTPUT_BUFFER_SIZE] = {};
 		osc::OutboundPacketStream packet_keypoints(buffer_keypoints, OUTPUT_BUFFER_SIZE);
 
-		//// step through captured maxine points and send them over OSC
-		//for (int userIndex = 0; userIndex < PEOPLE_TRACKING_BATCH_SIZE; userIndex++)
-		//{
-		//	for (int maxineKP = 0; maxineKP < NUM_KEYPOINTS; maxineKP++)
-		//	{
-		//		int idxOffset = userIndex * NUM_KEYPOINTS;
-		//		std::string jointName = MAXINE_JOINT_NAMES[maxineKP];
-		//		NvAR_Point2f pt = keypoints2D_sorted[idxOffset + maxineKP];
-		//		float ptx = (float)pt.x;
-		//		float pty = (float)pt.y;
+		// convert data to readable strings
+		std::string oscAddyHeadX = "/head_translation_x";
+		std::string oscAddyHeadY = "/head_translation_y";
+		std::string oscAddyHeadZ = "/head_translation_z";
+		std::string oscAddyGazeX = "/gaze_angle_x";
+		std::string oscAddyGazeY = "/gaze_angle_y";
 
-		//		// convert data to readable strings
-		//		std::string kpIdx = std::to_string(maxineKP);
-		//		std::string userIdx = std::to_string(userIndex);
-		//		std::string oscAddyStrX = USER_STR + "_" + userIdx + "_" + kpIdx + "_" + jointName + "_x";
-		//		std::string oscAddyStrY = USER_STR + "_" + userIdx + "_" + kpIdx + "_" + jointName + "_y";
-
-		//		// send OSC bundle -- each user has their own keypoint osc endpoint
-		//		// send x position data
-		//		packet_keypoints.Clear();
-		//		packet_keypoints << osc::BeginMessage(oscAddyStrX.c_str()) << ptx << osc::EndMessage;
-		//		transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());
-
-		//		// send y position data
-		//		packet_keypoints.Clear();
-		//		packet_keypoints << osc::BeginMessage(oscAddyStrY.c_str()) << pty << osc::EndMessage;
-		//		transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());
-		//	}
-		//}
+		// send OSC bundle -- each user has their own keypoint osc endpoint
+		// send x position data
+		packet_keypoints.Clear();
+		packet_keypoints << osc::BeginBundleImmediate
+			<< osc::BeginMessage(oscAddyHeadX.c_str()) << headX << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHeadY.c_str()) << headY << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHeadZ.c_str()) << headZ << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeX.c_str()) << gazeX << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeY.c_str()) << gazeY << osc::EndMessage
+			<< osc::EndBundle;
+		transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());	
 	}
 
 	void SendStatusData(float fps)
@@ -694,34 +697,35 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 			cv::Scalar landmarks_color(0, 0, 255);			// blue
 
 			// get gaze direction and head rotation
-			NvAR_Quaternion* pose = gaze_ar_engine.getPose();
-			NvAR_Point3f* gaze_direction = gaze_ar_engine.getGazeDirectionPoints();
+			NvAR_Quaternion* headPose = gaze_ar_engine.getPose();
+			NvAR_Point3f* gazeDirection = gaze_ar_engine.getGazeDirectionPoints();
 
-			// TODO extract relevent tracking data 
+			gazeX = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
+			gazeY = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
+
+			headX = gaze_ar_engine.head_translation[0];
+			headY = gaze_ar_engine.head_translation[1];
+			headZ = gaze_ar_engine.head_translation[2];
 
 			if (FLAG_sendOsc) {
-				// TODO send data to TouchDesigner over osc
+				// send data to TouchDesigner over osc
+				osc::SendGazeData(gazeX, gazeY, headX, headY, headZ);
 			}
 
 			// draw keypoints, bbox, and gaze info to window on top of video
 			if (FLAG_drawTracking) {
 				// draw pose and estimated gaze
-				if (pose) {
-					gaze_ar_engine.DrawPose(frame, pose);
+				if (headPose) {
+					gaze_ar_engine.DrawPose(frame, headPose);
 					gaze_ar_engine.DrawEstimatedGaze(frame);
 				}
 
-				// display gaze angles
-				gazeX = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
-				gazeY = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
+				// display gaze angle data
 				//textCenter = cv::Point(120, 110);
 				//snprintf(buf, sizeof(buf), "gaze angles: %.1f %.1f", gazeX, gazeY);
 				//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
 
-				// display head translationss
-				headX = gaze_ar_engine.head_translation[0];
-				headY = gaze_ar_engine.head_translation[1];
-				headZ = gaze_ar_engine.head_translation[2];
+				// display head translation data
 				//textCenter = cv::Point(80, 80);
 				//snprintf(buf, sizeof(buf), "head translation: %.1f %.1f %.1f", headX, headY, headZ);
 				//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
@@ -750,7 +754,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 
 GazeTrack::Err GazeTrack::initGazeEngine(const char* modelPath, bool isNumLandmarks126, bool gazeRedirect, unsigned eyeSizeSensitivity, bool useCudaGraph) {
 	// exit if there is no camera or video file for video source
-	if (!(FLAG_videoSource == sharedMemory) && !cap.isOpened()) 
+	if (!(FLAG_videoSource == sharedMemory) && !cap.isOpened())
 		return errVideo;
 
 	int numLandmarkPoints = isNumLandmarks126 ? LANDMARKS_126 : LANDMARKS_68;
@@ -805,7 +809,7 @@ GazeTrack::Err GazeTrack::initSharedMemory()
 		shm->unlock();
 
 		shmTempFrame = cv::Mat(shmHeight, shmWidth, CV_8UC4);			// for converting image data from shared mem to frame
-		
+
 		inputHeight = shmHeight;
 		inputWidth = shmWidth;
 		gaze_ar_engine.setInputImageWidth(shmWidth);
@@ -832,10 +836,10 @@ GazeTrack::Err GazeTrack::initCamera(const char* camRes, unsigned int camID) {
 				inputWidth = 0;
 				break;
 			}
-			
+
 			if (inputWidth) cap.set(CV_CAP_PROP_FRAME_WIDTH, inputWidth);
 			if (inputHeight) cap.set(CV_CAP_PROP_FRAME_HEIGHT, inputHeight);
-			
+
 			inputWidth = (int)cap.get(CV_CAP_PROP_FRAME_WIDTH);
 			inputHeight = (int)cap.get(CV_CAP_PROP_FRAME_HEIGHT);
 
@@ -910,6 +914,7 @@ void GazeTrack::printArgsToConsole() {
 	printf("Use CUDA Graph: %s\n", FLAG_useCudaGraph ? "true" : "false");
 	printf("Chosen GPU: %d\n", FLAG_chosenGPU);
 	printf("Enable temporal optimizations: %d\n", FLAG_temporalSmoothing);
+	printf("Eye Size Sensitivity: %d\n", FLAG_eyeSizeSensitivity);
 	switch (FLAG_videoSource) {
 	case webcam:
 		printf("Video Source: Webcam\n");
@@ -947,7 +952,7 @@ int main(int argc, char** argv) {
 
 	GazeTrack app;
 	GazeTrack::Err doErr = GazeTrack::Err::errNone;
-	
+
 	// start initializing the tracking
 	app.gaze_ar_engine.setFaceStabilization(FLAG_temporalSmoothing);
 
@@ -1007,7 +1012,7 @@ GazeTrack::Err GazeTrack::run() {
 		// "frame" is a global variable shared among functions
 		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile)
 			doErr = acquireWebcamOrVideoFrame();
-		else if (FLAG_videoSource == sharedMemory) 
+		else if (FLAG_videoSource == sharedMemory)
 			doErr = acquireSharedMemFrame();
 
 		// We have reached the end of the video so return without any error.
@@ -1032,22 +1037,22 @@ GazeTrack::Err GazeTrack::run() {
 			}
 			// we need this cv::waitKey to allow the window to refresh
 			int n = cv::waitKey(1);
-		/*
-			if (n >= 0) {
-				static const int ESC_KEY = 27;
-				switch (n) {
-				case ESC_KEY:
-					break;
-				case '3':
-					gaze_ar_engine.destroyGazeRedirectionFeature();
-					gaze_ar_engine.createGazeRedirectionFeature(FLAG_modelPath.c_str());
-					gaze_ar_engine.initGazeRedirectionIOParams();
-					break;
-				default:
-					break;
+			/*
+				if (n >= 0) {
+					static const int ESC_KEY = 27;
+					switch (n) {
+					case ESC_KEY:
+						break;
+					case '3':
+						gaze_ar_engine.destroyGazeRedirectionFeature();
+						gaze_ar_engine.createGazeRedirectionFeature(FLAG_modelPath.c_str());
+						gaze_ar_engine.initGazeRedirectionIOParams();
+						break;
+					default:
+						break;
+					}
 				}
-			}
-		*/
+			*/
 		}
 	}
 	return doErr;
