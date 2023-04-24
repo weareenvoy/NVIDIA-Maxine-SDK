@@ -31,6 +31,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <process.h>	// for PID
 
 using namespace std;
 
@@ -51,7 +52,6 @@ using namespace std;
 #include "osc/OscOutboundPacketStream.h"
 #include "ip/UdpSocket.h"
 #include "ip/IpEndpointName.h"
-#include <process.h>	// for PID
 
 // using cuda for gpu distribution
 #include "cuda/cuda.h"
@@ -62,16 +62,16 @@ using namespace std;
 // helper classes
 #include "Timer.h"
 
+/********************************************************************************
+ * constant global values
+ ********************************************************************************/
+
 #if CV_MAJOR_VERSION >= 4
 #define CV_CAP_PROP_FRAME_WIDTH cv::CAP_PROP_FRAME_WIDTH
 #define CV_CAP_PROP_FRAME_HEIGHT cv::CAP_PROP_FRAME_HEIGHT
 #define CV_CAP_PROP_FPS cv::CAP_PROP_FPS
 #define CV_CAP_PROP_FRAME_COUNT cv::CAP_PROP_FRAME_COUNT
 #endif
-
-/********************************************************************************
- * constant global values
- ********************************************************************************/
 
 #ifndef M_PI
 #define M_PI 3.1415926535897932385
@@ -456,6 +456,10 @@ const char* BodyTrack::errorStringFromCode(BodyTrack::Err code) {
 	return msg;
 }
 
+/********************************************************************************
+ * osc communication
+ ********************************************************************************/
+
 namespace osc {
 
 	void InitOSC()
@@ -568,8 +572,6 @@ BodyTrack::BodyTrack() {
 	frameTime = 0;
 	frameIndex = 0;
 	nvErr = BodyEngine::errNone;
-	scaleOffsetXY[0] = scaleOffsetXY[2] = 1.f;
-	scaleOffsetXY[1] = scaleOffsetXY[3] = 0.f;
 }
 
 BodyTrack::~BodyTrack() {}
@@ -1273,16 +1275,17 @@ int main(int argc, char** argv) {
 			doErr = app.initSharedMemory();
 	}
 	BAIL_IF_ERR(doErr);
-	printf(".\nInitialized video stream...\n");
+	printf(".\nInitialized video stream!\n");
 
 	// initialize BodyEngine class based on model
 	doErr = app.initBodyEngine(FLAG_modelPath.c_str());
 	BAIL_IF_ERR(doErr);
-	printf("Initialized BodyEngine...\n");
+	printf("Initialized BodyEngine!\n");
 
+	// initialize osc communication
 	if (FLAG_sendOsc) {
 		osc::InitOSC();
-		printf("Initialized OSC communication...\n");
+		printf("Initialized OSC communication!\n");
 	}
 
 	// start analyzing the video each frame
@@ -1314,13 +1317,9 @@ BodyTrack::Err BodyTrack::run() {
 			doErr = acquireSharedMemFrame();
 		}
 
-		if (offlineMode && frame.empty()) {
-			// We have reached the end of the video so return without any error
-			return BodyTrack::errNone;
-		}
-		else if (doErr != BodyTrack::errNone) {
-			return doErr;
-		}
+		// We have reached the end of the video so return without any error
+		if (offlineMode && frame.empty()) return BodyTrack::errNone;
+		else if (doErr != BodyTrack::errNone) return doErr;
 
 		// get joint keypoint data and bounding box data
 		doErr = acquireBodyBoxAndKeyPoints();
@@ -1339,17 +1338,15 @@ BodyTrack::Err BodyTrack::run() {
 			if (!frame.empty() && FLAG_drawWindow) {
 				if (FLAG_drawFPS)
 					drawFPS(frame);
-			}
-			if (FLAG_drawWindow) {
 				cv::imshow(windowTitle, frame);
 			}
 
+			// This is leftover from parsing keys on the keyboard but might be useful
 			int n = cv::waitKey(1);
+			/*
 			if (n >= 0) {
-				//static const int ESC_KEY = 27;
-				//if (n == ESC_KEY) break;
-				/*
-				// This is leftover from parsing keys on the keyboard but might be useful
+				static const int ESC_KEY = 27;
+				if (n == ESC_KEY) break;
 				 switch (n) {
 				 case '1':
 						body_ar_engine.destroyFeatures();
@@ -1367,8 +1364,8 @@ BodyTrack::Err BodyTrack::run() {
 						body_ar_engine.initFeatureIOParams();
 						break;
 				}
-				*/
 			}
+			*/
 		}
 	}
 	return doErr;

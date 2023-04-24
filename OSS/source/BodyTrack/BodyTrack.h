@@ -10,7 +10,6 @@ public:
 	~BodyTrack();
 	static const char windowTitle[];
 
-
 	enum Err {
 		errNone = BodyEngine::Err::errNone,
 		errGeneral = BodyEngine::Err::errGeneral,
@@ -85,7 +84,6 @@ public:
 	Timer fpsSendDelayTimer;
 
 	float expr[6];
-	float scaleOffsetXY[4];
 	std::vector<cv::Scalar> colorCodes = { cv::Scalar(255,255,255) };
 
 };
