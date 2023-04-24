@@ -148,7 +148,6 @@ const bool GAZE_REDIRECT = false;		// we only care about gaze tracking data and 
 const unsigned int LANDMARKS_126 = 126;
 const unsigned int LANDMARKS_68 = 68;
 
-bool captureOutputs = false;			// Enables video/image capture and writing body detection/keypoints outputs to file. If input is video file, gets set to true
 
 /********************************************************************************
  * command-line arguments
@@ -159,6 +158,7 @@ FLAG_sendOsc = true,					// Send OSC data out of Maxine
 FLAG_drawTracking = true,				// Draw keypoint and bounding box data to window
 FLAG_drawWindow = true,					// Draw window with video feed to desktop
 FLAG_drawFPS = true,					// Write FPS debug information to window
+FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file. If input is video file, gets set to true
 FLAG_useCudaGraph = true,				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
 FLAG_temporalSmoothing = true,			// Temporally optimize face rect bounding box and facial landmarks
 FLAG_useDetailedLandmarks = false;		// Display 68 (false) or 126 (true) facial landmarks
@@ -201,6 +201,7 @@ static void Usage() {
 		" --cam_res=[WWWx]HHH					Specify webcam resolution as height or width x height (--cam_res=640x480 or --cam_res=480). Default is empty string.\n"
 		" --in_file_path=<file>					Specify the input file path. Default is empty string.\n"
 		" --out_file_path=<file>				Specify the output file path. Default is empty string.\n"
+		" --capture_outputs[=(true|false)]	Enables video/image capture and writing data to file. Default is false.\n"
 		" --codec=<fourcc>						FOURCC code for the desired codec. Default is H264 (avc1).\n"
 		" --model_path=<path>					Specify the directory containing the TRT models.\n"
 		" --send_osc[=(true|false)]				Enables sending of OSC data to TouchDesigner. Default is true."
@@ -296,6 +297,7 @@ static int ParseMyArgs(int argc, char** argv) {
 			GetFlagArgVal("cam_res", arg, &FLAG_camRes) ||
 			GetFlagArgVal("in_file_path", arg, &FLAG_inFilePath) ||
 			GetFlagArgVal("out_file_path", arg, &FLAG_outFilePath) ||
+			GetFlagArgVal("capture_outputs", arg, &FLAG_captureOutputs) ||
 			GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
 			GetFlagArgVal("model_path", arg, &FLAG_modelPath) ||
 			GetFlagArgVal("send_osc", arg, &FLAG_sendOsc) ||
@@ -519,7 +521,7 @@ void GazeTrack::DrawLandmarkPoints(const cv::Mat& src, NvAR_Point2f* facial_land
  ********************************************************************************/
 
 GazeTrack::Err GazeTrack::writeVideo(const cv::Mat& frm) {
-	if (captureOutputs) {
+	if (FLAG_captureOutputs) {
 		if (!capturedVideo.isOpened()) {
 			//Assign the filename for capturing video
 			const std::string currentCalendarTime = getCalendarTime();
@@ -742,7 +744,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 	frameTimer.resume();
 
 	// If captureOutputs has been set to true, save the output frames.
-	if (captureOutputs) {
+	if (FLAG_captureOutputs) {
 		writeVideo(frame);
 	}
 	return doErr;
@@ -890,7 +892,7 @@ GazeTrack::Err GazeTrack::initOfflineMode(const char* inputFilename, const char*
 		return Err::errGeneral;
 	}
 
-	captureOutputs = true;
+	FLAG_captureOutputs = true;
 	return Err::errNone;
 }
 
@@ -932,7 +934,7 @@ void GazeTrack::printArgsToConsole() {
 		break;
 	case videoFile:
 		printf("Video Source: Video File\n");
-		printf("Capture Outputs: %s\n", captureOutputs ? "true" : "false");
+		printf("Capture Outputs: %s\n", FLAG_captureOutputs ? "true" : "false");
 		printf("Capture Codec: %s\n", FLAG_captureCodec.c_str());
 		break;
 	default:
