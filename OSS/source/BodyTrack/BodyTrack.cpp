@@ -1310,12 +1310,10 @@ BodyTrack::Err BodyTrack::run() {
 	while (1) {
 		// get frame based on desired video source
 		// "frame" is a global variable shared among functions
-		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile) {
+		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile) 
 			doErr = acquireWebcamOrVideoFrame();
-		}
-		else if (FLAG_videoSource == sharedMemory) {
+		else if (FLAG_videoSource == sharedMemory) 
 			doErr = acquireSharedMemFrame();
-		}
 
 		// We have reached the end of the video so return without any error
 		if (offlineMode && frame.empty()) return BodyTrack::errNone;

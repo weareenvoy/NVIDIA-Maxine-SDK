@@ -148,6 +148,8 @@ const bool GAZE_REDIRECT = false;		// we only care about gaze tracking data and 
 const unsigned int LANDMARKS_126 = 126;
 const unsigned int LANDMARKS_68 = 68;
 
+bool captureOutputs = false;			// Enables video/image capture and writing body detection/keypoints outputs to file. If input is video file, gets set to true
+
 /********************************************************************************
  * command-line arguments
  ********************************************************************************/
@@ -157,28 +159,25 @@ FLAG_sendOsc = true,					// Send OSC data out of Maxine
 FLAG_drawTracking = true,				// Draw keypoint and bounding box data to window
 FLAG_drawWindow = true,					// Draw window with video feed to desktop
 FLAG_drawFPS = true,					// Write FPS debug information to window
-FLAG_captureOutputs = false,			// Enables video/image capture and writing body detection/keypoints outputs to file. If input is video file, gets set to true
-FLAG_debug = false,						// Print debugging information to the console
-FLAG_verbose = false,					// Print extra information to the console
 FLAG_useCudaGraph = true,				// Uses CUDA Graphs to improve performance. CUDA graph reduces the overhead of the GPU operation submission of 3D body tracking
 FLAG_temporalSmoothing = true,			
 FLAG_useDetailedLandmarks = false;		// Display 68 (false) or 126 (true) facial landmarks
 
 std::string
-FLAG_inFilePath,						// input file path on disk for video source (path + name + prefix)
-FLAG_outFilePrefix,						// output file prefix for writing data to disk (path + name but should not include file time, like .mp4)
+FLAG_inFilePath = "D:/Leviathan/_Clients/_Envoy/NVIDIA-Maxine-SDK/_testvideos/GazeTrackingTest.mov",		// input file path on disk for video source (path + name + prefix)
+FLAG_outFilePath = "D:/Leviathan/_Clients/_Envoy/NVIDIA-Maxine-SDK/_testvideos/GazeTrackingTest_GazeTrack.mov",						// output file prefix for writing data to disk (path + name but should not include file time, like .mp4)
 FLAG_camRes,							// If offlineMode=false, specifies the cam res. If width omitted, width is computed from height to give an aspect ratio of 4:3.
 FLAG_captureCodec = "avc1",				// avc1 = h264
 FLAG_modelPath = "C:/Program Files/NVIDIA Corporation/NVIDIA AR SDK/models",	// default installation location
 FLAG_sharedMemName = "TOPShm";
 
 unsigned int
-FLAG_videoSource = webcam,				// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
+FLAG_videoSource = videoFile,		// Specify video source. 0: Webcam, 1: Video File, 2: Shared Mem (TouchDesigner).
 FLAG_camIndex = 0,						// Index of webcam connected to the PC
 FLAG_chosenGPU = 0,
 FLAG_eyeSizeSensitivity = 3, 
-FLAG_keypointsPort = 7000,				// Sets the port on which we send out all keypoint data (for all 8 users)
-FLAG_statusPort = 7001;					// Sets the port on which we send out FPS, Pulse, and PID data
+FLAG_keypointsPort = 7002,				// Sets the port on which we send out all keypoint data (for all 8 users)
+FLAG_statusPort = 7003;					// Sets the port on which we send out FPS, Pulse, and PID data
 
 /********************************************************************************
  * parsing command line args
@@ -188,8 +187,6 @@ static void Usage() {
 	printf(
 		"GazeRedirect [<args> ...]\n"
 		"where <args> is\n"
-		" --verbose[=(true|false)]				report interesting info\n"
-		" --debug[=(true|false)]				report debugging info\n"
 		" --temporal[=(true|false)]				temporally optimize face rect and landmarks\n"
 		" --capture_outputs[=(true|false)]		enables video/image capture and writing face detection/landmark outputs\n"
 		" --cam_res=[WWWx]HHH					specify resolution as height or width x height\n"
@@ -277,13 +274,11 @@ static int ParseMyArgs(int argc, char** argv) {
 		if (arg[0] != '-') {
 			continue;
 		}
-		else if ((arg[1] == '-') &&
-			(GetFlagArgVal("verbose", arg, &FLAG_verbose) ||
-				GetFlagArgVal("debug", arg, &FLAG_debug) ||
+		else if ((arg[1] == '-') &&	(
 				GetFlagArgVal("in", arg, &FLAG_inFilePath) ||
-				GetFlagArgVal("out", arg, &FLAG_outFilePrefix) ||
+				GetFlagArgVal("out", arg, &FLAG_outFilePath) ||
 				GetFlagArgVal("landmarks_126", arg, &FLAG_useDetailedLandmarks) ||
-				GetFlagArgVal("capture_outputs", arg, &FLAG_captureOutputs) ||
+				GetFlagArgVal("capture_outputs", arg, &captureOutputs) ||
 				GetFlagArgVal("cam_res", arg, &FLAG_camRes) ||
 				GetFlagArgVal("codec", arg, &FLAG_captureCodec) ||
 				GetFlagArgVal("cam_id", arg, &FLAG_camIndex) ||
@@ -298,19 +293,8 @@ static int ParseMyArgs(int argc, char** argv) {
 		else if (GetFlagArgVal("help", arg, &help)) {
 			Usage();
 		}
-		else if (arg[1] != '-') {
-			for (++arg; *arg; ++arg) {
-				if (*arg == 'v') {
-					FLAG_verbose = true;
-				}
-				else {
-					// printf("Unknown flag: \"-%c\"\n", *arg);
-				}
-			}
-			continue;
-		}
 		else {
-			// printf("Unknown flag: \"%s\"\n", arg);
+			printf("Unknown flag: \"%s\"\n", arg);
 		}
 	}
 	return errs;
@@ -532,7 +516,7 @@ void GazeTrack::DrawLandmarkPoints(const cv::Mat& src, NvAR_Point2f* facial_land
  ********************************************************************************/
 
 GazeTrack::Err GazeTrack::writeVideo(const cv::Mat& frm) {
-	if (FLAG_captureOutputs) {
+	if (captureOutputs) {
 		if (!capturedVideo.isOpened()) {
 			//Assign the filename for capturing video
 			const std::string currentCalendarTime = getCalendarTime();
@@ -549,8 +533,7 @@ GazeTrack::Err GazeTrack::writeVideo(const cv::Mat& frm) {
 					return errVideo;
 				}
 
-				if (FLAG_verbose)
-					std::cout << "Capturing video started" << std::endl;
+				std::cout << "Capturing video started" << std::endl;
 
 				capturedVideo << frm;
 			}
@@ -565,8 +548,7 @@ GazeTrack::Err GazeTrack::writeVideo(const cv::Mat& frm) {
 	}
 	else {
 		if (capturedVideo.isOpened()) {
-			if (FLAG_verbose)
-				std::cout << "Capturing video ended" << std::endl;
+			std::cout << "Capturing video ended" << std::endl;
 			capturedVideo.release();
 		}
 	}
@@ -699,7 +681,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 		NvAR_Rect* bbox = gaze_ar_engine.getLargestBox();
 
 		// Check for valid bounding box in case confidence check fails
-		if (FLAG_drawTracking && bbox) {
+		if (bbox) {
 
 			char buf[64];
 			float gazeX, gazeY;
@@ -711,37 +693,43 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 			cv::Scalar textColor = cv::Scalar(0, 255, 0);	// green
 			cv::Scalar landmarks_color(0, 0, 255);			// blue
 
-			// Display gaze direction and head rotation
+			// get gaze direction and head rotation
 			NvAR_Quaternion* pose = gaze_ar_engine.getPose();
 			NvAR_Point3f* gaze_direction = gaze_ar_engine.getGazeDirectionPoints();
-			if (pose) {
-				gaze_ar_engine.DrawPose(frame, pose);
-				gaze_ar_engine.DrawEstimatedGaze(frame);
+
+			// TODO extract relevent tracking data 
+
+			if (FLAG_sendOsc) {
+				// TODO send data to TouchDesigner over osc
 			}
 
-			// display original image
-			//textCenter = cv::Point(120, 40);
-			//snprintf(buf, sizeof(buf), " Original image");
-			//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
+			// draw keypoints, bbox, and gaze info to window on top of video
+			if (FLAG_drawTracking) {
+				// draw pose and estimated gaze
+				if (pose) {
+					gaze_ar_engine.DrawPose(frame, pose);
+					gaze_ar_engine.DrawEstimatedGaze(frame);
+				}
 
-			// display gaze angles
-			gazeX = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
-			gazeY = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
-			//textCenter = cv::Point(120, 110);
-			//snprintf(buf, sizeof(buf), "gaze angles: %.1f %.1f", gazeX, gazeY);
-			//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
+				// display gaze angles
+				gazeX = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
+				gazeY = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
+				//textCenter = cv::Point(120, 110);
+				//snprintf(buf, sizeof(buf), "gaze angles: %.1f %.1f", gazeX, gazeY);
+				//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
 
-			// display head translationss
-			headX = gaze_ar_engine.head_translation[0];
-			headY = gaze_ar_engine.head_translation[1];
-			headZ = gaze_ar_engine.head_translation[2];
-			//textCenter = cv::Point(80, 80);
-			//snprintf(buf, sizeof(buf), "head translation: %.1f %.1f %.1f", headX, headY, headZ);
-			//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
+				// display head translationss
+				headX = gaze_ar_engine.head_translation[0];
+				headY = gaze_ar_engine.head_translation[1];
+				headZ = gaze_ar_engine.head_translation[2];
+				//textCenter = cv::Point(80, 80);
+				//snprintf(buf, sizeof(buf), "head translation: %.1f %.1f %.1f", headX, headY, headZ);
+				//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
 
-			// Display landmarks 
-			DrawLandmarkPoints(frame, gaze_ar_engine.getLandmarks(), gaze_ar_engine.getNumLandmarks(), &landmarks_color);
-			drawBBoxes(frame, gaze_ar_engine.getLargestBox());
+				// Display landmarks 
+				DrawLandmarkPoints(frame, gaze_ar_engine.getLandmarks(), gaze_ar_engine.getNumLandmarks(), &landmarks_color);
+				drawBBoxes(frame, gaze_ar_engine.getLargestBox());
+			}
 		}
 	}
 	if (offlineMode) {
@@ -750,7 +738,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 	frameTimer.resume();
 
 	// If captureOutputs has been set to true, save the output frames.
-	if (FLAG_captureOutputs) {
+	if (captureOutputs) {
 		writeVideo(frame);
 	}
 	return doErr;
@@ -761,7 +749,9 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
  ********************************************************************************/
 
 GazeTrack::Err GazeTrack::initGazeEngine(const char* modelPath, bool isNumLandmarks126, bool gazeRedirect, unsigned eyeSizeSensitivity, bool useCudaGraph) {
-	if (!cap.isOpened()) return errVideo;
+	// exit if there is no camera or video file for video source
+	if (!(FLAG_videoSource == sharedMemory) && !cap.isOpened()) 
+		return errVideo;
 
 	int numLandmarkPoints = isNumLandmarks126 ? LANDMARKS_126 : LANDMARKS_68;
 	gaze_ar_engine.setNumLandmarks(numLandmarkPoints);
@@ -815,6 +805,9 @@ GazeTrack::Err GazeTrack::initSharedMemory()
 		shm->unlock();
 
 		shmTempFrame = cv::Mat(shmHeight, shmWidth, CV_8UC4);			// for converting image data from shared mem to frame
+		
+		inputHeight = shmHeight;
+		inputWidth = shmWidth;
 		gaze_ar_engine.setInputImageWidth(shmWidth);
 		gaze_ar_engine.setInputImageHeight(shmHeight);
 
@@ -893,7 +886,7 @@ GazeTrack::Err GazeTrack::initOfflineMode(const char* inputFilename, const char*
 		return Err::errGeneral;
 	}
 
-	FLAG_captureOutputs = true;
+	captureOutputs = true;
 	return Err::errNone;
 }
 
@@ -934,7 +927,7 @@ void GazeTrack::printArgsToConsole() {
 		break;
 	case videoFile:
 		printf("Video Source: Video File\n");
-		printf("Capture Outputs: %s\n", FLAG_captureOutputs ? "true" : "false");
+		printf("Capture Outputs: %s\n", captureOutputs ? "true" : "false");
 		printf("Capture Codec: %s\n", FLAG_captureCodec.c_str());
 		break;
 	default:
@@ -970,7 +963,7 @@ int main(int argc, char** argv) {
 			printf("ERROR: %s, please specify input file using --in \n", app.errorStringFromCode(doErr));
 			goto bail;
 		}
-		doErr = app.initOfflineMode(FLAG_inFilePath.c_str(), FLAG_outFilePrefix.c_str());
+		doErr = app.initOfflineMode(FLAG_inFilePath.c_str(), FLAG_outFilePath.c_str());
 	}
 	else {
 		// initialize webcam or shared memory
@@ -1012,13 +1005,10 @@ GazeTrack::Err GazeTrack::run() {
 	while (1) {
 		// get frame based on desired video source
 		// "frame" is a global variable shared among functions
-		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile) {
-
+		if (FLAG_videoSource == webcam || FLAG_videoSource == videoFile)
 			doErr = acquireWebcamOrVideoFrame();
-		}
-		else if (FLAG_videoSource == sharedMemory) {
+		else if (FLAG_videoSource == sharedMemory) 
 			doErr = acquireSharedMemFrame();
-		}
 
 		// We have reached the end of the video so return without any error.
 		if (frame.empty() && offlineMode) return GazeTrack::errNone;
@@ -1034,7 +1024,7 @@ GazeTrack::Err GazeTrack::run() {
 		sendFPS();
 
 		// write frame to output file or to window
-		if (!offlineMode) {
+		if (FLAG_drawWindow && !offlineMode) {
 			if (!frame.empty()) {
 				if (FLAG_drawFPS)
 					drawFPS(frame);

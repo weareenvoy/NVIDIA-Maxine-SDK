@@ -65,7 +65,7 @@ public:
 	Err writeVideo(const cv::Mat& frm);
 
 	cv::VideoCapture cap{};
-	cv::Mat frame, gazeRedirectFrame;
+	cv::Mat frame, gazeRedirectFrame;	// we don't actually care about gazeRedirectFrame but we still need it as a function parameter
 	cv::VideoWriter gazeRedirectOutputVideo{};
 	std::ofstream gazeEngineVideoOutputFile;
 	cv::VideoWriter capturedVideo;
