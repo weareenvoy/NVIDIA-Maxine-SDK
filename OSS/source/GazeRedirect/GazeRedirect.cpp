@@ -367,7 +367,7 @@ namespace osc {
 		transmitSocket_status = new UdpTransmitSocket(IpEndpointName("127.0.0.1", FLAG_statusPort));
 	}
 
-	void SendGazeData(float gazeX, float gazeY, float headX, float headY, float headZ)
+	void SendGazeData(float headX, float headY, float headZ, NvAR_Point3f* gazeDirection)
 	{
 		char buffer_keypoints[OUTPUT_BUFFER_SIZE] = {};
 		osc::OutboundPacketStream packet_keypoints(buffer_keypoints, OUTPUT_BUFFER_SIZE);
@@ -376,8 +376,12 @@ namespace osc {
 		std::string oscAddyHeadX = "/head_translation_x";
 		std::string oscAddyHeadY = "/head_translation_y";
 		std::string oscAddyHeadZ = "/head_translation_z";
-		std::string oscAddyGazeX = "/gaze_angle_x";
-		std::string oscAddyGazeY = "/gaze_angle_y";
+		std::string oscAddyGazeOriginX = "/gaze_origin_x";
+		std::string oscAddyGazeOriginY = "/gaze_origin_y";
+		std::string oscAddyGazeOriginZ = "/gaze_origin_z";
+		std::string oscAddyGazeTargetX = "/gaze_target_x";
+		std::string oscAddyGazeTargetY = "/gaze_target_y";
+		std::string oscAddyGazeTargetZ = "/gaze_target_z";
 
 		// send OSC bundle -- each user has their own keypoint osc endpoint
 		// send x position data
@@ -386,8 +390,12 @@ namespace osc {
 			<< osc::BeginMessage(oscAddyHeadX.c_str()) << headX << osc::EndMessage
 			<< osc::BeginMessage(oscAddyHeadY.c_str()) << headY << osc::EndMessage
 			<< osc::BeginMessage(oscAddyHeadZ.c_str()) << headZ << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeX.c_str()) << gazeX << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeY.c_str()) << gazeY << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeOriginX.c_str()) << gazeDirection[0].x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeOriginY.c_str()) << gazeDirection[0].y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeOriginZ.c_str()) << gazeDirection[0].z << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeTargetX.c_str()) << gazeDirection[1].x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeTargetY.c_str()) << gazeDirection[1].y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGazeTargetZ.c_str()) << gazeDirection[1].z << osc::EndMessage
 			<< osc::EndBundle;
 		transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());	
 	}
@@ -689,8 +697,8 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 		if (bbox) {
 
 			char buf[64];
-			float gazeX, gazeY;
-			float headX, headY, headZ;
+			float gazePitch, gazeYaw;
+			float headX, headY, headZ, gazeX, gazeY, gazeZ;
 			float fontScale = (inputHeight <= 720) ? 0.5 : .5;
 			int fontFace = cv::FONT_HERSHEY_SIMPLEX;
 			int fontThickness = 1;
@@ -702,8 +710,12 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 			NvAR_Quaternion* headPose = gaze_ar_engine.getPose();
 			NvAR_Point3f* gazeDirection = gaze_ar_engine.getGazeDirectionPoints();
 
-			gazeX = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
-			gazeY = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
+			gazePitch = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
+			gazeYaw = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
+
+			gazeX = gaze_ar_engine.gaze_direction[0].x;
+			gazeY = gaze_ar_engine.gaze_direction[0].y;
+			gazeZ = gaze_ar_engine.gaze_direction[0].z;
 
 			headX = gaze_ar_engine.head_translation[0];
 			headY = gaze_ar_engine.head_translation[1];
@@ -711,7 +723,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 
 			if (FLAG_sendOsc) {
 				// send data to TouchDesigner over osc
-				osc::SendGazeData(gazeX, gazeY, headX, headY, headZ);
+				osc::SendGazeData(headX, headY, headZ, gazeDirection);
 			}
 
 			// draw keypoints, bbox, and gaze info to window on top of video
@@ -722,15 +734,15 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 					gaze_ar_engine.DrawEstimatedGaze(frame);
 				}
 
-				// display gaze angle data
-				//textCenter = cv::Point(120, 110);
-				//snprintf(buf, sizeof(buf), "gaze angles: %.1f %.1f", gazeX, gazeY);
-				//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
-
 				// display head translation data
-				//textCenter = cv::Point(80, 80);
-				//snprintf(buf, sizeof(buf), "head translation: %.1f %.1f %.1f", headX, headY, headZ);
-				//cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
+				textCenter = cv::Point(80, 80);
+				snprintf(buf, sizeof(buf), "head translation: (%.1f, %.1f, %.1f)", headX, headY, headZ);
+				cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
+
+				// display gaze angle data
+				textCenter = cv::Point(80, 110);
+				snprintf(buf, sizeof(buf), "gaze angles: %.1f (pitch), %.1f (yaw)", gazePitch, gazeYaw);
+				cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
 
 				// Display landmarks 
 				DrawLandmarkPoints(frame, gaze_ar_engine.getLandmarks(), gaze_ar_engine.getNumLandmarks(), &landmarks_color);
