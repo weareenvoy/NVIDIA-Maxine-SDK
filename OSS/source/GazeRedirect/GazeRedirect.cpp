@@ -367,35 +367,47 @@ namespace osc {
 		transmitSocket_status = new UdpTransmitSocket(IpEndpointName("127.0.0.1", FLAG_statusPort));
 	}
 
-	void SendGazeData(float headX, float headY, float headZ, NvAR_Point3f* gazeDirection)
+	void SendGazeData(float head3D_X, float head3D_Y, float head3D_Z, cv::Point headPose2D, NvAR_Point3f* gazeDirection3D, std::vector<cv::Point2f> gazeDirection2D)
 	{
 		char buffer_keypoints[OUTPUT_BUFFER_SIZE] = {};
 		osc::OutboundPacketStream packet_keypoints(buffer_keypoints, OUTPUT_BUFFER_SIZE);
 
 		// convert data to readable strings
-		std::string oscAddyHeadX = "/head_translation_x";
-		std::string oscAddyHeadY = "/head_translation_y";
-		std::string oscAddyHeadZ = "/head_translation_z";
-		std::string oscAddyGazeOriginX = "/gaze_origin_x";
-		std::string oscAddyGazeOriginY = "/gaze_origin_y";
-		std::string oscAddyGazeOriginZ = "/gaze_origin_z";
-		std::string oscAddyGazeTargetX = "/gaze_target_x";
-		std::string oscAddyGazeTargetY = "/gaze_target_y";
-		std::string oscAddyGazeTargetZ = "/gaze_target_z";
+		std::string oscAddyHead3DX = "/head_3D_translation_x";
+		std::string oscAddyHead3DY = "/head_3D_translation_y";
+		std::string oscAddyHead3DZ = "/head_3D_translation_z";
+		std::string oscAddyGaze3D_OriginX = "/gaze_3D_origin_x";
+		std::string oscAddyGaze3D_OriginY = "/gaze_3D_origin_y";
+		std::string oscAddyGaze3D_OriginZ = "/gaze_3D_origin_z";
+		std::string oscAddyGaze3D_TargetX = "/gaze_3D_target_x";
+		std::string oscAddyGaze3D_TargetY = "/gaze_3D_target_y";
+		std::string oscAddyGaze3D_TargetZ = "/gaze_3D_target_z";
+		std::string oscAddyHead2D_X = "/head_2D_x";
+		std::string oscAddyHead2D_Y = "/head_2D_y";
+		std::string oscAddyGaze2D_OriginX = "/gaze_2D_origin_x";
+		std::string oscAddyGaze2D_OriginY = "/gaze_2D_origin_y";
+		std::string oscAddyGaze2D_TargetX = "/gaze_2D_target_x";
+		std::string oscAddyGaze2D_TargetY = "/gaze_2D_target_y";
 
 		// send OSC bundle -- each user has their own keypoint osc endpoint
 		// send x position data
 		packet_keypoints.Clear();
 		packet_keypoints << osc::BeginBundleImmediate
-			<< osc::BeginMessage(oscAddyHeadX.c_str()) << headX << osc::EndMessage
-			<< osc::BeginMessage(oscAddyHeadY.c_str()) << headY << osc::EndMessage
-			<< osc::BeginMessage(oscAddyHeadZ.c_str()) << headZ << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeOriginX.c_str()) << gazeDirection[0].x << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeOriginY.c_str()) << gazeDirection[0].y << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeOriginZ.c_str()) << gazeDirection[0].z << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeTargetX.c_str()) << gazeDirection[1].x << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeTargetY.c_str()) << gazeDirection[1].y << osc::EndMessage
-			<< osc::BeginMessage(oscAddyGazeTargetZ.c_str()) << gazeDirection[1].z << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHead3DX.c_str()) << head3D_X << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHead3DY.c_str()) << head3D_Y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHead3DZ.c_str()) << head3D_Z << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze3D_OriginX.c_str()) << gazeDirection3D[0].x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze3D_OriginY.c_str()) << gazeDirection3D[0].y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze3D_OriginZ.c_str()) << gazeDirection3D[0].z << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze3D_TargetX.c_str()) << gazeDirection3D[1].x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze3D_TargetY.c_str()) << gazeDirection3D[1].y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze3D_TargetZ.c_str()) << gazeDirection3D[1].z << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHead2D_X.c_str()) << headPose2D.x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyHead2D_Y.c_str()) << headPose2D.y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze2D_OriginX.c_str()) << gazeDirection2D[0].x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze2D_OriginY.c_str()) << gazeDirection2D[0].y << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze2D_TargetX.c_str()) << gazeDirection2D[1].x << osc::EndMessage
+			<< osc::BeginMessage(oscAddyGaze2D_TargetY.c_str()) << gazeDirection2D[1].y << osc::EndMessage
 			<< osc::EndBundle;
 		transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());	
 	}
@@ -698,7 +710,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 
 			char buf[64];
 			float gazePitch, gazeYaw;
-			float headX, headY, headZ, gazeX, gazeY, gazeZ;
+			float head3D_X, head3D_Y, head3D_Z, gaze3D_X, gaze3D_Y, gaze3D_Z;
 			float fontScale = (inputHeight <= 720) ? 0.5 : .5;
 			int fontFace = cv::FONT_HERSHEY_SIMPLEX;
 			int fontThickness = 1;
@@ -707,36 +719,35 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 			cv::Scalar landmarks_color(0, 0, 255);			// blue
 
 			// get gaze direction and head rotation
-			NvAR_Quaternion* headPose = gaze_ar_engine.getPose();
-			NvAR_Point3f* gazeDirection = gaze_ar_engine.getGazeDirectionPoints();
+			NvAR_Quaternion* headPose3D = gaze_ar_engine.getPose();
+			NvAR_Point3f* gazeDirection3D = gaze_ar_engine.getGazeDirectionPoints();
+			std::vector<cv::Point2f> gazeDirection2D = { {0,0}, {0,0} };	// {{ origin.x, origin.y}, {direction.x, direction.y}}
+			cv::Point headPose2D = { 0,0 };									// { origin.x, origin.y }
 
 			gazePitch = gaze_ar_engine.gaze_angles_vector[0] * DEGREES_PER_RADIAN;
 			gazeYaw = gaze_ar_engine.gaze_angles_vector[1] * DEGREES_PER_RADIAN;
 
-			gazeX = gaze_ar_engine.gaze_direction[0].x;
-			gazeY = gaze_ar_engine.gaze_direction[0].y;
-			gazeZ = gaze_ar_engine.gaze_direction[0].z;
+			gaze3D_X = gaze_ar_engine.gaze_direction[0].x;
+			gaze3D_Y = gaze_ar_engine.gaze_direction[0].y;
+			gaze3D_Z = gaze_ar_engine.gaze_direction[0].z;
 
-			headX = gaze_ar_engine.head_translation[0];
-			headY = gaze_ar_engine.head_translation[1];
-			headZ = gaze_ar_engine.head_translation[2];
+			head3D_X = gaze_ar_engine.head_translation[0];
+			head3D_Y = gaze_ar_engine.head_translation[1];
+			head3D_Z = gaze_ar_engine.head_translation[2];
 
-			if (FLAG_sendOsc) {
-				// send data to TouchDesigner over osc
-				osc::SendGazeData(headX, headY, headZ, gazeDirection);
-			}
+			// get gaze information in a 2D plane using data in 3D space
+			// only write to frame if the drawTracking flag is set to true
+			gazeDirection2D = gaze_ar_engine.DrawEstimatedGaze(frame, FLAG_drawTracking);
+			if (headPose3D) headPose2D = gaze_ar_engine.DrawPose(frame, headPose3D, FLAG_drawTracking);
+
+			// send data to TouchDesigner over osc
+			if (FLAG_sendOsc) osc::SendGazeData(head3D_X, head3D_Y, head3D_Z, headPose2D, gazeDirection3D, gazeDirection2D);
 
 			// draw keypoints, bbox, and gaze info to window on top of video
 			if (FLAG_drawTracking) {
-				// draw pose and estimated gaze
-				if (headPose) {
-					gaze_ar_engine.DrawPose(frame, headPose);
-					gaze_ar_engine.DrawEstimatedGaze(frame);
-				}
-
 				// display head translation data
 				textCenter = cv::Point(80, 80);
-				snprintf(buf, sizeof(buf), "head translation: (%.1f, %.1f, %.1f)", headX, headY, headZ);
+				snprintf(buf, sizeof(buf), "head translation: (%.1f, %.1f, %.1f)", head3D_X, head3D_Y, head3D_Z);
 				cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
 
 				// display gaze angle data
@@ -744,7 +755,7 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 				snprintf(buf, sizeof(buf), "gaze angles: %.1f (pitch), %.1f (yaw)", gazePitch, gazeYaw);
 				cv::putText(frame, buf, textCenter, fontFace, fontScale, textColor, fontThickness);
 
-				// Display landmarks 
+				// Display landmarks and bounding box 
 				DrawLandmarkPoints(frame, gaze_ar_engine.getLandmarks(), gaze_ar_engine.getNumLandmarks(), &landmarks_color);
 				drawBBoxes(frame, gaze_ar_engine.getLargestBox());
 			}
