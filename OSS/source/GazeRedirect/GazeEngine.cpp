@@ -251,8 +251,8 @@ void GazeEngine::enlargeAndSquarifyImageBox(float enlarge, NvAR_Rect& box, int F
 	box.y = roundf(center.y - box.height * .5f);
 }
 
-cv::Point GazeEngine::DrawPose(const cv::Mat& src, const NvAR_Quaternion* pose, bool drawTrackingToWindow) const {
-	const float vector_scale = 50.0f;
+cv::Point GazeEngine::DrawPose(const cv::Mat& src, const NvAR_Quaternion* pose, bool drawTrackingToWindow, float vectorScale) const {
+	const float vector_scale = vectorScale;
 	const int thickness = 2;
 	float rot_mat[3][3];
 	set_rotation_from_quaternion(pose, rot_mat[0]);
@@ -290,12 +290,12 @@ std::array<float, 2> GazeEngine::GetAverageLandmarkPositionInGlSpace() const {
 	return res;
 }
 
-std::vector<cv::Point2f> GazeEngine::DrawEstimatedGaze(const cv::Mat& src, bool drawTrackingToWindow) {
+std::vector<cv::Point2f> GazeEngine::DrawEstimatedGaze(const cv::Mat& src, bool drawTrackingToWindow, float vectorScale) {
 	// Get the largest bounding box of the face.
 	NvAR_Rect* pFaceBox = getLargestBox();
 
 	std::vector<cv::Point3f> gaze_direction_3d;
-	const float distance = 50;
+	const float distance = vectorScale;
 	// Create opencv Point3f objects from direction points
 	cv::Point3f gaze_direction_origin(gaze_direction[0].x, gaze_direction[0].y, gaze_direction[0].z);
 	cv::Point3f gaze_direction_target;

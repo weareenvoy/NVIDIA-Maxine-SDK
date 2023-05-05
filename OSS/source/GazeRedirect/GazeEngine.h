@@ -154,9 +154,9 @@ public:
 	void setEyeSizeSensitivity(unsigned);
 	int getNumLandmarks() { return numLandmarks; }
 	int getNumGazeOutputLandmarks() { return num_output_landmarks; }
-	cv::Point DrawPose(const cv::Mat& src, const NvAR_Quaternion* pose, bool drawTrackingToWindow) const;
+	cv::Point DrawPose(const cv::Mat& src, const NvAR_Quaternion* pose, bool drawTrackingToWindow, float vectorScale) const;
 	std::array<float, 2> GetAverageLandmarkPositionInGlSpace() const;
-	std::vector<cv::Point2f> DrawEstimatedGaze(const cv::Mat& src, bool drawTrackingToWindow);
+	std::vector<cv::Point2f> DrawEstimatedGaze(const cv::Mat& src, bool drawTrackingToWindow, float vectorScale);
 	NvAR_Point3f* getGazeDirectionPoints();
 
 	NvCVImage inputImageBuffer{}, tmpImage{}, outputImageBuffer{};

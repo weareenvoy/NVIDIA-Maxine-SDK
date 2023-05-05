@@ -177,7 +177,8 @@ FLAG_camIndex = 0,						// Index of webcam connected to the PC
 FLAG_chosenGPU = 0,
 FLAG_eyeSizeSensitivity = 3,
 FLAG_keypointsPort = 7002,				// Sets the port on which we send out all keypoint data (for all 8 users)
-FLAG_statusPort = 7003;					// Sets the port on which we send out FPS, Pulse, and PID data
+FLAG_statusPort = 7003,					// Sets the port on which we send out FPS, Pulse, and PID data
+FLAG_vectorScale = 50.0f;			// scale of the head translation and gaze direction vector. Default is 50.
 
 /********************************************************************************
  * parsing command line args
@@ -189,6 +190,7 @@ static void Usage() {
 		"where <args> is\n"
 		" --landmarks_detailed[=(true|false)]   Set the number of facial landmark points to 126 (true), otherwise 68 (false). Default is false.\n"
 		" --eyesize_sensitivity[=(2|3|4|5|6)]	Set the eye size sensitivity parameter, an integer value between 2 and 6. Default is 3.\n"
+		" --vector_scale[=(float)]				Scale of the head translation and gaze direction vector. Default is 50.\n"
 		" --temporal[=(true|false)]				Temporally optimize face rect and landmarks. Default is true.\n"
 		" --draw_tracking[=(true|false)]		Draw tracking information (joints, bbox) on top of frame. Default is true.\n"
 		" --draw_window[=(true|false)]			Draw video feed to window on desktop. Default is true.\n"
@@ -285,6 +287,7 @@ static int ParseMyArgs(int argc, char** argv) {
 		else if ((arg[1] == '-') && (
 			GetFlagArgVal("landmarks_detailed", arg, &FLAG_useDetailedLandmarks) ||
 			GetFlagArgVal("eyesize_sensitivity", arg, &FLAG_eyeSizeSensitivity) ||
+			GetFlagArgVal("vector_scale", arg, &FLAG_vectorScale) ||
 			GetFlagArgVal("temporal", arg, &FLAG_temporalSmoothing) ||
 			GetFlagArgVal("draw_tracking", arg, &FLAG_drawTracking) ||
 			GetFlagArgVal("draw_window", arg, &FLAG_drawWindow) ||
@@ -388,6 +391,7 @@ namespace osc {
 		std::string oscAddyGaze2D_OriginY = "/gaze_2D_origin_y";
 		std::string oscAddyGaze2D_TargetX = "/gaze_2D_target_x";
 		std::string oscAddyGaze2D_TargetY = "/gaze_2D_target_y";
+		std::string oscVectorScale = "/vector_scale";
 
 		// send OSC bundle -- each user has their own keypoint osc endpoint
 		// send x position data
@@ -408,6 +412,7 @@ namespace osc {
 			<< osc::BeginMessage(oscAddyGaze2D_OriginY.c_str()) << gazeDirection2D[0].y << osc::EndMessage
 			<< osc::BeginMessage(oscAddyGaze2D_TargetX.c_str()) << gazeDirection2D[1].x << osc::EndMessage
 			<< osc::BeginMessage(oscAddyGaze2D_TargetY.c_str()) << gazeDirection2D[1].y << osc::EndMessage
+			<< osc::BeginMessage(oscVectorScale.c_str()) << float(FLAG_vectorScale) << osc::EndMessage
 			<< osc::EndBundle;
 		transmitSocket_keypoints->Send(packet_keypoints.Data(), packet_keypoints.Size());	
 	}
@@ -737,8 +742,8 @@ GazeTrack::Err GazeTrack::acquireGazeRedirection() {
 
 			// get gaze information in a 2D plane using data in 3D space
 			// only write to frame if the drawTracking flag is set to true
-			gazeDirection2D = gaze_ar_engine.DrawEstimatedGaze(frame, FLAG_drawTracking);
-			if (headPose3D) headPose2D = gaze_ar_engine.DrawPose(frame, headPose3D, FLAG_drawTracking);
+			gazeDirection2D = gaze_ar_engine.DrawEstimatedGaze(frame, FLAG_drawTracking, float(FLAG_vectorScale));
+			if (headPose3D) headPose2D = gaze_ar_engine.DrawPose(frame, headPose3D, FLAG_drawTracking, float(FLAG_vectorScale));
 
 			// send data to TouchDesigner over osc
 			if (FLAG_sendOsc) osc::SendGazeData(head3D_X, head3D_Y, head3D_Z, headPose2D, gazeDirection3D, gazeDirection2D);
@@ -940,6 +945,7 @@ void GazeTrack::printArgsToConsole() {
 	printf("Chosen GPU: %d\n", FLAG_chosenGPU);
 	printf("Enable temporal optimizations: %d\n", FLAG_temporalSmoothing);
 	printf("Eye Size Sensitivity: %d\n", FLAG_eyeSizeSensitivity);
+	printf("Vector Scale: %d\n", FLAG_vectorScale);
 	switch (FLAG_videoSource) {
 	case webcam:
 		printf("Video Source: Webcam\n");
